@@ -10,6 +10,7 @@ using RTSPWallpaperStudio.Infrastructure.Paths;
 using RTSPWallpaperStudio.Infrastructure.Relay;
 using RTSPWallpaperStudio.Infrastructure.Security;
 using RTSPWallpaperStudio.Infrastructure.Settings;
+using RTSPWallpaperStudio.Infrastructure.Startup;
 using RTSPWallpaperStudio.Interop;
 
 namespace RTSPWallpaperStudio.App;
@@ -19,6 +20,11 @@ public partial class App : System.Windows.Application
     private Mutex? _singleInstance;
     private IHost? _host;
     private MainViewModel? _viewModel;
+
+    public App()
+    {
+        SessionEnding += OnSessionEnding;
+    }
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -34,7 +40,8 @@ public partial class App : System.Windows.Application
         var startupOptions = new AppStartupOptions(
             e.Args.Any(x => x.Equals("--safe-mode", StringComparison.OrdinalIgnoreCase)),
             e.Args.Any(x => x.Equals("--stop-all", StringComparison.OrdinalIgnoreCase)),
-            e.Args.Any(x => x.Equals("--reset-desktop", StringComparison.OrdinalIgnoreCase)));
+            e.Args.Any(x => x.Equals("--reset-desktop", StringComparison.OrdinalIgnoreCase)),
+            e.Args.Any(x => x.Equals("--startup", StringComparison.OrdinalIgnoreCase)));
         var paths = new AppPathService();
         _host = Host.CreateDefaultBuilder(e.Args)
             .ConfigureLogging(logging =>
@@ -54,6 +61,7 @@ public partial class App : System.Windows.Application
                 services.AddSingleton<RuntimeStateStore>();
                 services.AddSingleton<RendererProcessManager>();
                 services.AddSingleton<Go2RtcProcessManager>();
+                services.AddSingleton<StartupRegistrationService>();
                 services.AddSingleton<MainViewModel>();
             })
             .Build();
@@ -61,9 +69,14 @@ public partial class App : System.Windows.Application
         await _host.StartAsync();
         await _host.Services.GetRequiredService<Go2RtcProcessManager>().EnsureStartedAsync();
         _viewModel = _host.Services.GetRequiredService<MainViewModel>();
+        await _viewModel.InitializationTask;
         var window = new MainWindow(_viewModel);
         MainWindow = window;
         window.Show();
+        if (startupOptions.StartupLaunch && _viewModel.StartMinimized)
+        {
+            window.HideToTray(showNotification: false);
+        }
     }
 
     protected override void OnExit(ExitEventArgs e)
@@ -95,5 +108,13 @@ public partial class App : System.Windows.Application
 
         _singleInstance?.Dispose();
         base.OnExit(e);
+    }
+
+    private void OnSessionEnding(object? sender, SessionEndingCancelEventArgs e)
+    {
+        if (MainWindow is MainWindow window)
+        {
+            window.AllowCloseForSystemShutdown();
+        }
     }
 }

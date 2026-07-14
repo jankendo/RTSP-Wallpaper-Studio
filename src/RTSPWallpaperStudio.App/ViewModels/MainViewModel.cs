@@ -13,6 +13,7 @@ using RTSPWallpaperStudio.Infrastructure.Paths;
 using RTSPWallpaperStudio.Infrastructure.Relay;
 using RTSPWallpaperStudio.Infrastructure.Security;
 using RTSPWallpaperStudio.Infrastructure.Settings;
+using RTSPWallpaperStudio.Infrastructure.Startup;
 using RTSPWallpaperStudio.Interop;
 
 namespace RTSPWallpaperStudio.App.ViewModels;
@@ -29,6 +30,7 @@ public partial class MainViewModel : ObservableObject
     private readonly ILogger<MainViewModel> _logger;
     private readonly AppStartupOptions _startupOptions;
     private readonly Go2RtcProcessManager _go2RtcProcessManager;
+    private readonly StartupRegistrationService _startupRegistrationService;
     private AppSettings _settings = new();
     private RuntimeState _runtimeState = new();
     private CancellationTokenSource? _connectionTestCts;
@@ -50,6 +52,15 @@ public partial class MainViewModel : ObservableObject
 
     [ObservableProperty]
     private string _themeMode = "Light";
+
+    [ObservableProperty]
+    private bool _startWithWindows;
+
+    [ObservableProperty]
+    private bool _startMinimized = true;
+
+    [ObservableProperty]
+    private string _startupRegistrationStatus = "Windows起動時設定を確認しています。";
 
     [ObservableProperty]
     private bool _isSafeMode;
@@ -100,6 +111,7 @@ public partial class MainViewModel : ObservableObject
         AppPathService paths,
         AppStartupOptions startupOptions,
         Go2RtcProcessManager go2RtcProcessManager,
+        StartupRegistrationService startupRegistrationService,
         ILogger<MainViewModel> logger)
     {
         _settingsStore = settingsStore;
@@ -111,6 +123,7 @@ public partial class MainViewModel : ObservableObject
         _paths = paths;
         _startupOptions = startupOptions;
         _go2RtcProcessManager = go2RtcProcessManager;
+        _startupRegistrationService = startupRegistrationService;
         _logger = logger;
         _isSafeMode = startupOptions.SafeMode;
 
@@ -125,7 +138,7 @@ public partial class MainViewModel : ObservableObject
         NavigateCommand = new RelayCommand<string>(page => NavigateTo(page));
         OpenLogsCommand = new RelayCommand(OpenLogs);
         _rendererManager.RendererEventReceived += RendererManagerOnRendererEventReceived;
-        _ = InitializeAsync();
+        InitializationTask = InitializeAsync();
     }
 
     public ObservableCollection<RtspProfile> Profiles { get; } = [];
@@ -148,6 +161,7 @@ public partial class MainViewModel : ObservableObject
     public IAsyncRelayCommand SaveSettingsCommand { get; }
     public IRelayCommand<string> NavigateCommand { get; }
     public IRelayCommand OpenLogsCommand { get; }
+    public Task InitializationTask { get; }
     public string PasswordInput { get; set; } = string.Empty;
     public string UsernameInput { get; set; } = string.Empty;
 
@@ -204,6 +218,9 @@ public partial class MainViewModel : ObservableObject
             _runtimeState.PreviousShutdownClean = false;
             await _runtimeStateStore.SaveAsync(_runtimeState);
             ThemeMode = string.IsNullOrWhiteSpace(_settings.ThemeMode) ? "Light" : _settings.ThemeMode;
+            StartWithWindows = _settings.StartWithWindows;
+            StartMinimized = _settings.StartMinimized;
+            SynchronizeStartupRegistration();
             Profiles.Clear();
             foreach (var profile in _settings.Profiles)
             {
@@ -464,13 +481,50 @@ public partial class MainViewModel : ObservableObject
         _settings.SelectedProfileId = SelectedProfile?.Id;
         _settings.SelectedMonitorId = SelectedMonitor?.PersistentId;
         _settings.ThemeMode = ThemeMode;
+        _settings.StartWithWindows = StartWithWindows;
+        _settings.StartMinimized = StartMinimized;
+        var startupResult = _startupRegistrationService.SetEnabled(StartWithWindows);
+        StartupRegistrationStatus = startupResult.Message;
+        if (!startupResult.Success)
+        {
+            StatusMessage = $"設定を保存できませんでした。{startupResult.Message}\nエラーコード：{startupResult.ErrorCode}";
+            FooterMessage = startupResult.TechnicalDetails ?? "診断ページとログを確認してください。";
+            return;
+        }
+
         await _settingsStore.SaveAsync(_settings);
-        StatusMessage = "設定を保存しました。";
+        StatusMessage = StartWithWindows
+            ? "設定を保存しました。Windows起動時にトレイへ常駐します。"
+            : "設定を保存しました。Windows起動時の自動起動は無効です。";
     }
 
     private void OpenLogs()
     {
         Process.Start(new ProcessStartInfo("explorer.exe", $"\"{_paths.Logs}\"") { UseShellExecute = true });
+    }
+
+    private void SynchronizeStartupRegistration()
+    {
+        var current = _startupRegistrationService.GetStatus();
+        if (!current.Success)
+        {
+            StartupRegistrationStatus = current.Message;
+            return;
+        }
+
+        if (current.IsEnabled != StartWithWindows)
+        {
+            var result = _startupRegistrationService.SetEnabled(StartWithWindows);
+            StartupRegistrationStatus = result.Message;
+            if (!result.Success)
+            {
+                _logger.LogWarning("Windows起動時設定の同期に失敗しました。code={ErrorCode} details={Details}", result.ErrorCode, result.TechnicalDetails);
+            }
+
+            return;
+        }
+
+        StartupRegistrationStatus = current.Message;
     }
 
     private void RendererManagerOnRendererEventReceived(object? sender, RendererEvent rendererEvent)

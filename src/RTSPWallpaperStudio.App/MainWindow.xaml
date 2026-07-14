@@ -202,6 +202,20 @@
                         <StackPanel>
                             <TextBlock Text="設定" FontSize="22" FontWeight="SemiBold" /><TextBlock Text="変更は明示的に保存します。初回起動や異常終了時は安全側で復元を止めます。" Foreground="{DynamicResource MutedInk}" Margin="0,5,0,20" TextWrapping="Wrap" />
                             <TextBlock Text="テーマ" FontWeight="SemiBold" /><ComboBox SelectedValue="{Binding ThemeMode}" SelectedValuePath="Tag" Margin="0,6,0,18" Padding="8"><ComboBoxItem Content="ライト" Tag="Light" /><ComboBoxItem Content="ダーク" Tag="Dark" /><ComboBoxItem Content="システム" Tag="System" /></ComboBox>
+                            <TextBlock Text="Windows起動" FontWeight="SemiBold" />
+                            <CheckBox IsChecked="{Binding StartWithWindows, Mode=TwoWay}" Margin="0,8,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="Windows起動時に起動" FontWeight="SemiBold" />
+                                    <TextBlock Text="ログオン時にアプリを起動し、通知領域へ常駐します。" Foreground="{DynamicResource MutedInk}" Margin="0,3,0,0" TextWrapping="Wrap" />
+                                </StackPanel>
+                            </CheckBox>
+                            <CheckBox IsChecked="{Binding StartMinimized, Mode=TwoWay}" Margin="0,10,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="起動時は画面を表示しない" FontWeight="SemiBold" />
+                                    <TextBlock Text="自動起動時はトレイだけに表示します。トレイアイコンから画面を開けます。" Foreground="{DynamicResource MutedInk}" Margin="0,3,0,0" TextWrapping="Wrap" />
+                                </StackPanel>
+                            </CheckBox>
+                            <TextBlock Text="{Binding StartupRegistrationStatus}" Foreground="{DynamicResource MutedInk}" Margin="0,12,0,18" TextWrapping="Wrap" />
                             <TextBlock Text="セーフモード" FontWeight="SemiBold" /><TextBlock Text="{Binding IsSafeMode, StringFormat=現在の状態：{0}}" Foreground="{DynamicResource MutedInk}" Margin="0,6,0,18" /><TextBlock Text="緊急停止ショートカット：Ctrl + Alt + Shift + F12" FontWeight="SemiBold" /><Button Content="設定を保存" Command="{Binding SaveSettingsCommand}" Style="{StaticResource PrimaryButton}" Margin="0,22,0,0" HorizontalAlignment="Left" />
                         </StackPanel>
                     </Border>

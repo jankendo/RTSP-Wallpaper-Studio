@@ -5,6 +5,7 @@ using RTSPWallpaperStudio.Core.Domain;
 using RTSPWallpaperStudio.Infrastructure.Diagnostics;
 using RTSPWallpaperStudio.Infrastructure.Ipc;
 using RTSPWallpaperStudio.Infrastructure.Relay;
+using RTSPWallpaperStudio.Infrastructure.Startup;
 using RTSPWallpaperStudio.Interop;
 
 namespace RTSPWallpaperStudio.Diagnostics;
@@ -18,7 +19,15 @@ internal static class Program
         if (options.ShowHelp)
         {
             Console.WriteLine("Usage: RTSPWallpaperStudio.Diagnostics.exe --url <rtsp-url> [--transport tcp|udp|automatic] [--timeout 10] [--cache 300] [--start-go2rtc] [--wallpaper] [--ipc-smoke]");
+            Console.WriteLine("       RTSPWallpaperStudio.Diagnostics.exe --startup-status");
+            Console.WriteLine("       RTSPWallpaperStudio.Diagnostics.exe --startup-enable [--startup-exe <RTSPWallpaperStudio.App.exe>]");
+            Console.WriteLine("       RTSPWallpaperStudio.Diagnostics.exe --startup-disable");
             return 0;
+        }
+
+        if (options.StartupAction is not null)
+        {
+            return RunStartupCommand(options);
         }
 
         if (options.Wallpaper || options.IpcSmoke)
@@ -121,6 +130,8 @@ internal static class Program
         var startGo2Rtc = false;
         var wallpaper = false;
         var ipcSmoke = false;
+        string? startupAction = null;
+        string? startupExecutable = null;
         var help = false;
         for (var i = 0; i < args.Length; i++)
         {
@@ -135,13 +146,33 @@ internal static class Program
                 case "--start-go2rtc": startGo2Rtc = true; break;
                 case "--wallpaper": wallpaper = true; break;
                 case "--ipc-smoke": ipcSmoke = true; break;
+                case "--startup-status": startupAction = "status"; break;
+                case "--startup-enable": startupAction = "enable"; break;
+                case "--startup-disable": startupAction = "disable"; break;
+                case "--startup-exe": startupExecutable = args[++i]; break;
                 case "--transport": transport = Enum.Parse<TransportMode>(args[++i], ignoreCase: true); break;
                 case "--hardware": hardware = Enum.Parse<HardwareDecodeMode>(args[++i], ignoreCase: true); break;
                 default: throw new ArgumentException($"Unknown argument: {args[i]}");
             }
         }
 
-        return new DiagnosticOptions(url, user, password, transport, timeout, cache, hardware, startGo2Rtc, wallpaper, ipcSmoke, help);
+        return new DiagnosticOptions(url, user, password, transport, timeout, cache, hardware, startGo2Rtc, wallpaper, ipcSmoke,
+            startupAction, startupExecutable, help);
+    }
+
+    private static int RunStartupCommand(DiagnosticOptions options)
+    {
+        var service = new StartupRegistrationService();
+        if (options.StartupAction == "status")
+        {
+            var status = service.GetStatus();
+            Console.WriteLine(JsonSerializer.Serialize(status, JsonOptions));
+            return status.Success ? 0 : 20;
+        }
+
+        var result = service.SetEnabled(options.StartupAction == "enable", options.StartupExecutable);
+        Console.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
+        return result.Success ? 0 : 21;
     }
 
     private static async Task<int> RunIpcSmokeAsync(DiagnosticOptions options, Go2RtcProcessManager? relay)
@@ -191,5 +222,6 @@ internal static class Program
     }
 
     private sealed record DiagnosticOptions(string Url, string? UserName, string? Password, TransportMode Transport,
-        int TimeoutSeconds, int CacheMs, HardwareDecodeMode HardwareDecode, bool StartGo2Rtc, bool Wallpaper, bool IpcSmoke, bool ShowHelp);
+        int TimeoutSeconds, int CacheMs, HardwareDecodeMode HardwareDecode, bool StartGo2Rtc, bool Wallpaper, bool IpcSmoke,
+        string? StartupAction, string? StartupExecutable, bool ShowHelp);
 }

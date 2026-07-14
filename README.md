@@ -21,6 +21,8 @@ RTSP映像を、Windowsデスクトップアイコンの背面にあるWorkerW�
 - 日次ファイルログ、診断ページ、ライト/ダークテーマ
 - DPAPI CurrentUserによるパスワード暗号化
 - アトミックなJSON設定保存と1世代バックアップ
+- 通知領域への常駐、ウィンドウを閉じても終了しない安全なトレイ運用
+- 設定画面からのWindows起動時自動起動（現在ユーザーHKCU、管理者権限不要）
 - xUnit単体テスト、Windows統合テスト、GitHub Actions
 - Portable ZIPとMSIX生成のためのスクリプト
 
@@ -60,6 +62,16 @@ dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.D
 ```
 
 `--wallpaper` を付けると、接続テスト成功後にRendererを起動し、`WallpaperVisible`イベントを受信してから停止します。`--start-go2rtc` は `C:\go2rtc\go2rtc.exe` を診断プロセスの所有下で起動し、検証終了時にそれだけを停止します。`--ipc-smoke` はRTSP接続を省略してRendererのNamed Pipe接続、Ready/Heartbeat/停止イベントだけを検証します。GUIを使わないため、CI・障害再現・ログ採取に利用できます。
+
+アプリは閉じるボタンまたは最小化で終了せず、通知領域へ格納されます。トレイの「表示」で画面を戻し、「緊急停止」でRendererを停止し、「終了」で完全終了します。設定画面の「Windows起動時に起動」を有効にして保存すると、現在ユーザーのHKCU Runへアプリ本体を登録します。「起動時は画面を表示しない」を有効にすると、ログオン時はトレイだけで起動します。
+
+自動起動設定はGUIを使わず次の診断コマンドでも確認できます。
+
+```powershell
+dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.Diagnostics.csproj -c Release -- --startup-status
+dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.Diagnostics.csproj -c Release -- --startup-enable --startup-exe "C:\Path\To\RTSPWallpaperStudio.App.exe"
+dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.Diagnostics.csproj -c Release -- --startup-disable
+```
 
 ## ビルド
 

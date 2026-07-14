@@ -1,3 +1,3 @@
 namespace RTSPWallpaperStudio.App;
 
-public sealed record AppStartupOptions(bool SafeMode, bool StopAll, bool ResetDesktop);
+public sealed record AppStartupOptions(bool SafeMode, bool StopAll, bool ResetDesktop, bool StartupLaunch);

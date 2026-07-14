@@ -13,6 +13,8 @@ public partial class MainWindow : Window
     private readonly EmergencyHotkeyService _emergencyHotkey = new();
     private readonly Forms.NotifyIcon _trayIcon = new();
     private HwndSource? _hwndSource;
+    private bool _exitRequested;
+    private bool _residentNoticeShown;
 
     public MainWindow(MainViewModel viewModel)
     {
@@ -20,6 +22,8 @@ public partial class MainWindow : Window
         _viewModel = viewModel;
         DataContext = viewModel;
         SourceInitialized += OnSourceInitialized;
+        Closing += OnClosing;
+        StateChanged += OnStateChanged;
         Closed += OnClosed;
         _viewModel.PropertyChanged += ViewModelOnPropertyChanged;
         ConfigureTrayIcon();
@@ -69,6 +73,25 @@ public partial class MainWindow : Window
         _trayIcon.Dispose();
     }
 
+    private void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
+    {
+        if (_exitRequested)
+        {
+            return;
+        }
+
+        e.Cancel = true;
+        HideToTray(showNotification: true);
+    }
+
+    private void OnStateChanged(object? sender, EventArgs e)
+    {
+        if (WindowState == WindowState.Minimized)
+        {
+            HideToTray(showNotification: false);
+        }
+    }
+
     private void ConfigureTrayIcon()
     {
         _trayIcon.Icon = System.Drawing.SystemIcons.Application;
@@ -79,16 +102,39 @@ public partial class MainWindow : Window
         menu.Items.Add("表示", null, (_, _) => ShowFromTray());
         menu.Items.Add("緊急停止", null, (_, _) => _viewModel.EmergencyStopCommand.Execute(null));
         menu.Items.Add(new Forms.ToolStripSeparator());
-        menu.Items.Add("終了", null, (_, _) => Close());
+        menu.Items.Add("終了", null, (_, _) => ExitApplication());
         _trayIcon.ContextMenuStrip = menu;
     }
 
-    private void ShowFromTray()
+    public void ShowFromTray()
     {
         Show();
         WindowState = WindowState.Normal;
         Activate();
     }
+
+    public void HideToTray(bool showNotification)
+    {
+        if (WindowState == WindowState.Minimized)
+        {
+            WindowState = WindowState.Normal;
+        }
+
+        Hide();
+        if (showNotification && !_residentNoticeShown)
+        {
+            _residentNoticeShown = true;
+            _trayIcon.ShowBalloonTip(3000, "RTSP Wallpaper Studio", "アプリは終了せず、通知領域に常駐しています。トレイアイコンから表示または終了できます。", Forms.ToolTipIcon.Info);
+        }
+    }
+
+    public void ExitApplication()
+    {
+        _exitRequested = true;
+        System.Windows.Application.Current.Shutdown();
+    }
+
+    public void AllowCloseForSystemShutdown() => _exitRequested = true;
 
     private void ViewModelOnPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
