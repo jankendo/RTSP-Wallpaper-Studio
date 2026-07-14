@@ -100,11 +100,33 @@ public partial class MainWindow : Window
 
     private static void ApplyTheme(string mode)
     {
-        var dark = string.Equals(mode, "Dark", StringComparison.OrdinalIgnoreCase);
-        System.Windows.Application.Current.Resources["WindowBackground"] = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#101722" : "#F5F7FB"));
-        System.Windows.Application.Current.Resources["CardBackground"] = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#1B2738" : "#FFFFFF"));
-        System.Windows.Application.Current.Resources["Ink"] = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#F1F5FB" : "#1D2433"));
-        System.Windows.Application.Current.Resources["MutedInk"] = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#AAB9CD" : "#657087"));
-        System.Windows.Application.Current.Resources["Accent"] = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(dark ? "#5C91F5" : "#2764D8"));
+        var highContrast = SystemParameters.HighContrast;
+        var dark = string.Equals(mode, "Dark", StringComparison.OrdinalIgnoreCase) ||
+                   (string.Equals(mode, "System", StringComparison.OrdinalIgnoreCase) && highContrast);
+        var values = highContrast
+            ? new Dictionary<string, string>
+            {
+                ["WindowBackground"] = "#000000", ["CardBackground"] = "#000000", ["Ink"] = "#FFFFFF", ["MutedInk"] = "#FFFFFF",
+                ["Accent"] = "#FFFF00", ["SidebarBackground"] = "#000000", ["SidebarForeground"] = "#FFFFFF", ["SidebarMutedForeground"] = "#FFFFFF",
+                ["NavigationHoverBackground"] = "#333333", ["NavigationSelectedBackground"] = "#FFFF00", ["NavigationSelectedForeground"] = "#000000",
+                ["NavigationFocusBorder"] = "#FFFFFF", ["ButtonBackground"] = "#FFFF00", ["ButtonForeground"] = "#000000", ["ButtonBorder"] = "#FFFFFF",
+                ["DangerBackground"] = "#FF0000", ["DangerForeground"] = "#FFFFFF", ["FocusBorder"] = "#FFFFFF"
+            }
+            : new Dictionary<string, string>
+            {
+                ["WindowBackground"] = dark ? "#101722" : "#F5F7FB", ["CardBackground"] = dark ? "#1B2738" : "#FFFFFF",
+                ["Ink"] = dark ? "#F1F5FB" : "#1D2433", ["MutedInk"] = dark ? "#AAB9CD" : "#657087",
+                ["Accent"] = dark ? "#5C91F5" : "#2764D8", ["SidebarBackground"] = dark ? "#0E1726" : "#22304A",
+                ["SidebarForeground"] = "#F2F6FF", ["SidebarMutedForeground"] = "#B4C3D8", ["NavigationHoverBackground"] = dark ? "#263B5B" : "#2E4263",
+                ["NavigationSelectedBackground"] = dark ? "#355A9B" : "#3C65A3", ["NavigationSelectedForeground"] = "#FFFFFF",
+                ["NavigationFocusBorder"] = "#F6C453", ["ButtonBackground"] = dark ? "#2A3A52" : "#E8EDF5",
+                ["ButtonForeground"] = dark ? "#F1F5FB" : "#172235", ["ButtonBorder"] = dark ? "#536A88" : "#B8C5D8",
+                ["DangerBackground"] = dark ? "#C1495B" : "#B83E51", ["DangerForeground"] = "#FFFFFF", ["FocusBorder"] = "#F6C453"
+            };
+
+        foreach (var (key, value) in values)
+        {
+            System.Windows.Application.Current.Resources[key] = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(value));
+        }
     }
 }

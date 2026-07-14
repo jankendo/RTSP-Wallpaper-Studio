@@ -24,7 +24,9 @@ internal static class Program
 
     private static async Task RunAsync(string[] args)
     {
+        Trace("RunAsync開始");
         var commandLine = RendererCommandLine.Parse(args);
+        Trace($"引数解析完了 pipe={commandLine.PipeName}");
         if (string.IsNullOrWhiteSpace(commandLine.PipeName))
         {
             Environment.ExitCode = 2;
@@ -32,17 +34,25 @@ internal static class Program
         }
 
         using var lifetime = new CancellationTokenSource();
+        Trace("Rendererウィンドウ作成前");
         using var window = new NativeRendererWindow();
+        Trace($"Rendererウィンドウ作成完了 hwnd=0x{window.Hwnd.ToInt64():X}");
         await using var ipc = new RendererIpcClient(commandLine.PipeName);
+        Trace("IPC接続前");
         await ipc.ConnectAsync(lifetime.Token);
+        Trace("IPC接続完了");
         var desktopHost = new DesktopHostController(new DesktopHostDiscovery());
         await using var player = new RendererStreamPlayer(window, desktopHost, rendererEvent => ipc.SendEventAsync(rendererEvent, lifetime.Token));
 
+        Trace("RendererReady送信前");
         await ipc.SendEventAsync(new RendererEvent(commandLine.RendererId, RendererEventType.RendererReady, DateTimeOffset.UtcNow,
             UserMessage: "Rendererを起動しました。"), lifetime.Token);
+        Trace("RendererReady送信完了");
 
+        Trace("コマンドループ開始");
         var commandLoop = ipc.RunCommandLoopAsync(async message =>
         {
+            Trace($"コマンド受信 name={message.Name}");
             switch (message.Name.ToLowerInvariant())
             {
                 case "start" when message.Payload is not null:
@@ -68,8 +78,17 @@ internal static class Program
 
         var watchdog = WatchdogAsync(commandLine.ParentProcessId, commandLine.RendererId, player, window, desktopHost, ipc, lifetime.Token);
         NativeRendererWindow.RunMessageLoop();
+        Trace("メッセージループ終了");
         lifetime.Cancel();
         await Task.WhenAny(commandLoop, watchdog);
+    }
+
+    private static void Trace(string message)
+    {
+        if (string.Equals(Environment.GetEnvironmentVariable("RTSP_WALLPAPER_IPC_TRACE"), "1", StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine($"[renderer-trace] {message}");
+        }
     }
 
     private static async Task WatchdogAsync(int parentPid, string rendererId, RendererStreamPlayer player, NativeRendererWindow window,
@@ -86,7 +105,7 @@ internal static class Program
             }
 
             await ipc.SendEventAsync(new RendererEvent(rendererId, RendererEventType.Heartbeat, DateTimeOffset.UtcNow), cancellationToken);
-            if (player.IsRunning && !desktopHost.ValidateAttachment(window.Hwnd, out _))
+            if (player.IsRunning && player.IsAttached && !desktopHost.ValidateAttachment(window.Hwnd, out _))
             {
                 await player.ReattachAfterShellRestartAsync(cancellationToken);
             }

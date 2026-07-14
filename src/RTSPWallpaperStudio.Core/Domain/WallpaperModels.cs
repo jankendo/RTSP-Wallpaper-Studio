@@ -156,7 +156,9 @@ public sealed record RendererStartOptions(
     int NetworkCachingMs,
     DisplayMode DisplayMode,
     string MonitorId,
-    int ParentProcessId);
+    int ParentProcessId,
+    HardwareDecodeMode HardwareDecode = HardwareDecodeMode.Automatic,
+    bool MuteAudio = true);
 
 public sealed record RendererStatusMessage(
     PlaybackStatus Status,
@@ -199,7 +201,12 @@ public enum RendererEventType
 public static class RendererErrorCodes
 {
     public const string VlcInitFailed = "VLC_INIT_FAILED";
+    public const string VlcNativeMissing = "VLC_NATIVE_MISSING";
+    public const string VlcPluginPathInvalid = "VLC_PLUGIN_PATH_INVALID";
+    public const string VlcArchitectureMismatch = "VLC_ARCHITECTURE_MISMATCH";
     public const string RtspOpenFailed = "RTSP_OPEN_FAILED";
+    public const string RtspPortClosed = "RTSP_PORT_CLOSED";
+    public const string RtspUnauthorized = "RTSP_UNAUTHORIZED";
     public const string RtspNoVideoTrack = "RTSP_NO_VIDEO_TRACK";
     public const string RtspFirstFrameTimeout = "RTSP_FIRST_FRAME_TIMEOUT";
     public const string DesktopProgmanNotFound = "DESKTOP_PROGMAN_NOT_FOUND";

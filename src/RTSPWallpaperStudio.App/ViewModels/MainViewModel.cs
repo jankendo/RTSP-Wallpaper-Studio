@@ -10,6 +10,7 @@ using RTSPWallpaperStudio.Core.Services;
 using RTSPWallpaperStudio.Infrastructure.Diagnostics;
 using RTSPWallpaperStudio.Infrastructure.Ipc;
 using RTSPWallpaperStudio.Infrastructure.Paths;
+using RTSPWallpaperStudio.Infrastructure.Relay;
 using RTSPWallpaperStudio.Infrastructure.Security;
 using RTSPWallpaperStudio.Infrastructure.Settings;
 using RTSPWallpaperStudio.Interop;
@@ -27,8 +28,10 @@ public partial class MainViewModel : ObservableObject
     private readonly AppPathService _paths;
     private readonly ILogger<MainViewModel> _logger;
     private readonly AppStartupOptions _startupOptions;
+    private readonly Go2RtcProcessManager _go2RtcProcessManager;
     private AppSettings _settings = new();
     private RuntimeState _runtimeState = new();
+    private CancellationTokenSource? _connectionTestCts;
 
     [ObservableProperty]
     private RtspProfile? _selectedProfile;
@@ -60,6 +63,33 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private string _hotkeyWarning = string.Empty;
 
+    [ObservableProperty]
+    private NavigationItemViewModel? _selectedNavigationItem;
+
+    [ObservableProperty]
+    private bool _isConnectionTestRunning;
+
+    [ObservableProperty]
+    private double _connectionTestProgress;
+
+    [ObservableProperty]
+    private string _connectionTestStage = "未実行";
+
+    [ObservableProperty]
+    private string _connectionTestErrorCode = string.Empty;
+
+    [ObservableProperty]
+    private string _connectionTestTechnicalDetails = string.Empty;
+
+    [ObservableProperty]
+    private bool _canApplyWallpaper;
+
+    [ObservableProperty]
+    private bool _canCancelConnectionTest;
+
+    [ObservableProperty]
+    private string _relayStatus = "go2rtcを確認しています。";
+
     public MainViewModel(
         JsonSettingsStore settingsStore,
         ProtectedSecretStore secretStore,
@@ -69,6 +99,7 @@ public partial class MainViewModel : ObservableObject
         RuntimeStateStore runtimeStateStore,
         AppPathService paths,
         AppStartupOptions startupOptions,
+        Go2RtcProcessManager go2RtcProcessManager,
         ILogger<MainViewModel> logger)
     {
         _settingsStore = settingsStore;
@@ -79,17 +110,19 @@ public partial class MainViewModel : ObservableObject
         _runtimeStateStore = runtimeStateStore;
         _paths = paths;
         _startupOptions = startupOptions;
+        _go2RtcProcessManager = go2RtcProcessManager;
         _logger = logger;
         _isSafeMode = startupOptions.SafeMode;
 
-        ApplyCommand = new AsyncRelayCommand(ApplyAsync);
-        TestConnectionCommand = new AsyncRelayCommand(TestConnectionAsync);
+        ApplyCommand = new AsyncRelayCommand(ApplyAsync, () => CanApplyWallpaper && !IsConnectionTestRunning);
+        TestConnectionCommand = new AsyncRelayCommand(TestConnectionAsync, () => !IsConnectionTestRunning);
+        CancelConnectionTestCommand = new AsyncRelayCommand(CancelConnectionTestAsync, () => CanCancelConnectionTest);
         StopCommand = new AsyncRelayCommand(StopAsync);
         EmergencyStopCommand = new AsyncRelayCommand(EmergencyStopAsync);
         ReconnectCommand = new AsyncRelayCommand(ReconnectAsync);
         ResetDesktopCommand = new AsyncRelayCommand(ResetDesktopAsync);
         SaveSettingsCommand = new AsyncRelayCommand(SaveSettingsAsync);
-        NavigateCommand = new RelayCommand<string>(page => CurrentPage = string.IsNullOrWhiteSpace(page) ? "home" : page);
+        NavigateCommand = new RelayCommand<string>(page => NavigateTo(page));
         OpenLogsCommand = new RelayCommand(OpenLogs);
         _rendererManager.RendererEventReceived += RendererManagerOnRendererEventReceived;
         _ = InitializeAsync();
@@ -97,9 +130,17 @@ public partial class MainViewModel : ObservableObject
 
     public ObservableCollection<RtspProfile> Profiles { get; } = [];
     public ObservableCollection<MonitorInfo> Monitors { get; } = [];
-    public IReadOnlyList<string> NavigationItems { get; } = ["home", "profiles", "display", "diagnostics", "settings"];
+    public IReadOnlyList<NavigationItemViewModel> NavigationItems { get; } =
+    [
+        new("home", "ホーム", "⌂"),
+        new("profiles", "RTSPプロファイル", "◈"),
+        new("display", "ディスプレイ", "▣"),
+        new("diagnostics", "診断と安全", "✓"),
+        new("settings", "設定", "⚙")
+    ];
     public IAsyncRelayCommand ApplyCommand { get; }
     public IAsyncRelayCommand TestConnectionCommand { get; }
+    public IAsyncRelayCommand CancelConnectionTestCommand { get; }
     public IAsyncRelayCommand StopCommand { get; }
     public IAsyncRelayCommand EmergencyStopCommand { get; }
     public IAsyncRelayCommand ReconnectCommand { get; }
@@ -108,6 +149,7 @@ public partial class MainViewModel : ObservableObject
     public IRelayCommand<string> NavigateCommand { get; }
     public IRelayCommand OpenLogsCommand { get; }
     public string PasswordInput { get; set; } = string.Empty;
+    public string UsernameInput { get; set; } = string.Empty;
 
     public string CurrentProfileStatus => SelectedProfile?.LastStatus switch
     {
@@ -121,8 +163,25 @@ public partial class MainViewModel : ObservableObject
 
     public void SetHotkeyWarning(string warning) => HotkeyWarning = warning;
 
+    partial void OnSelectedNavigationItemChanged(NavigationItemViewModel? value)
+    {
+        if (value is not null)
+        {
+            CurrentPage = value.Id;
+        }
+    }
+
+    private void NavigateTo(string? page)
+    {
+        _connectionTestCts?.Cancel();
+        var target = string.IsNullOrWhiteSpace(page) ? "home" : page;
+        SelectedNavigationItem = NavigationItems.FirstOrDefault(x => x.Id.Equals(target, StringComparison.OrdinalIgnoreCase));
+        CurrentPage = SelectedNavigationItem?.Id ?? "home";
+    }
+
     public async Task MarkCleanShutdownAsync()
     {
+        _connectionTestCts?.Cancel();
         _runtimeState.PreviousShutdownClean = true;
         _runtimeState.WallpaperApplyInProgress = false;
         await _runtimeStateStore.SaveAsync(_runtimeState);
@@ -133,6 +192,8 @@ public partial class MainViewModel : ObservableObject
         try
         {
             _settings = await _settingsStore.LoadAsync();
+            var relay = await _go2RtcProcessManager.EnsureStartedAsync();
+            RelayStatus = relay.Status;
             _runtimeState = await _runtimeStateStore.LoadAsync();
             if (!_runtimeState.PreviousShutdownClean || _runtimeState.WallpaperApplyInProgress)
             {
@@ -150,11 +211,17 @@ public partial class MainViewModel : ObservableObject
             }
 
             SelectedProfile = Profiles.FirstOrDefault(x => x.Id == _settings.SelectedProfileId) ?? Profiles.FirstOrDefault();
+            SelectedNavigationItem = NavigationItems[0];
+            UsernameInput = SelectedProfile?.UserName ?? string.Empty;
             RefreshMonitors();
             SelectedMonitor = Monitors.FirstOrDefault(x => x.PersistentId == _settings.SelectedMonitorId) ?? Monitors.FirstOrDefault(x => x.IsPrimary) ?? Monitors.FirstOrDefault();
             StatusMessage = IsSafeMode
                 ? "セーフモードで起動しました。既存の壁紙は自動復元していません。"
                 : $"{Monitors.Count}台のディスプレイを検出しました。RTSP URLを確認して設定してください。";
+            if (!relay.Available)
+            {
+                StatusMessage += $"\n{relay.Status}";
+            }
             if (_startupOptions.StopAll)
             {
                 await EmergencyStopAsync();
@@ -189,12 +256,101 @@ public partial class MainViewModel : ObservableObject
             return;
         }
 
-        StatusMessage = "LibVLCでRTSP映像トラックを解析しています…";
-        var result = await _connectionTester.TestAsync(SelectedProfile.Url, SelectedProfile.ConnectionTimeoutSeconds);
-        StatusMessage = result.Success ? $"解析成功：{result.Elapsed.TotalMilliseconds:0}ms\n{result.Details}" : $"{result.Summary}\n{result.Details}";
-        FooterMessage = result.Success
-            ? "RTSP映像トラックを確認しました。壁紙設定時はRendererが最初の映像出力を確認してから表示します。"
-            : "RTSP映像を確認できませんでした。壁紙を表示せず、URL・配信ソフト・ファイアウォールを確認してください。";
+        if (!RtspUrlService.TryNormalize(SelectedProfile.Url, out var parts, out var error))
+        {
+            ConnectionTestErrorCode = RendererErrorCodes.RtspOpenFailed;
+            ConnectionTestTechnicalDetails = error;
+            StatusMessage = error;
+            CanApplyWallpaper = false;
+            return;
+        }
+
+        IsConnectionTestRunning = true;
+        CanCancelConnectionTest = true;
+        CanApplyWallpaper = false;
+        ConnectionTestProgress = 0;
+        ConnectionTestStage = "ValidatingUrl";
+        ConnectionTestErrorCode = string.Empty;
+        ConnectionTestTechnicalDetails = string.Empty;
+        ConnectionTestSteps.Clear();
+        _connectionTestCts?.Dispose();
+        _connectionTestCts = new CancellationTokenSource();
+        var userName = !string.IsNullOrWhiteSpace(UsernameInput)
+            ? UsernameInput
+            : !string.IsNullOrWhiteSpace(parts.UserName) ? parts.UserName : SelectedProfile.UserName;
+        var password = !string.IsNullOrEmpty(PasswordInput)
+            ? PasswordInput
+            : parts.Password ?? _secretStore.Unprotect(SelectedProfile.ProtectedPassword);
+        var request = new ConnectionTestRequest(parts.Url, userName, password, SelectedProfile.Transport,
+            SelectedProfile.NetworkCachingMs, SelectedProfile.ConnectionTimeoutSeconds,
+            SelectedProfile.HardwareDecode, SelectedProfile.MuteAudio);
+        StatusMessage = "LibVLCで再生と映像出力を確認しています…";
+        try
+        {
+            var progress = new Progress<ConnectionTestProgress>(UpdateConnectionTestProgress);
+            var result = await _connectionTester.TestAsync(request, progress, _connectionTestCts.Token);
+            ConnectionTestErrorCode = result.ErrorCode ?? string.Empty;
+            ConnectionTestTechnicalDetails = result.TechnicalDetails ?? result.Details;
+            foreach (var step in result.Steps ?? [])
+            {
+                if (!ConnectionTestSteps.Contains(step)) ConnectionTestSteps.Add(step);
+            }
+
+            CanApplyWallpaper = result.Success;
+            StatusMessage = result.Success
+                ? $"接続成功：{result.Elapsed.TotalMilliseconds:0}ms\n{result.Details}"
+                : $"{result.Summary}\n{result.Details}";
+            FooterMessage = result.Success
+                ? $"接続方式：{result.ActualTransport ?? "自動"}。PlayingかつVoutCount>0を確認しました。壁紙設定へ進めます。"
+                : "接続テスト失敗。壁紙は表示しません。診断とログのエラーコードを確認してください。";
+        }
+        catch (OperationCanceledException)
+        {
+            ConnectionTestStage = "Cancelled";
+            ConnectionTestErrorCode = "RTSP_TEST_CANCELLED";
+            ConnectionTestTechnicalDetails = "接続テストをキャンセルしました。";
+            StatusMessage = "接続テストをキャンセルしました。";
+            FooterMessage = "壁紙は表示していません。必要ならURLを確認して再試行してください。";
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "接続テストに失敗しました。");
+            ConnectionTestStage = "Failed";
+            ConnectionTestErrorCode = RendererErrorCodes.RtspOpenFailed;
+            ConnectionTestTechnicalDetails = ex.ToString();
+            StatusMessage = "接続テストに失敗しました。";
+            FooterMessage = "診断ページとログを確認してください。パスワードはログに記録しません。";
+        }
+        finally
+        {
+            IsConnectionTestRunning = false;
+            CanCancelConnectionTest = false;
+            _connectionTestCts?.Dispose();
+            _connectionTestCts = null;
+            TestConnectionCommand.NotifyCanExecuteChanged();
+            CancelConnectionTestCommand.NotifyCanExecuteChanged();
+            ApplyCommand.NotifyCanExecuteChanged();
+        }
+    }
+
+    public ObservableCollection<string> ConnectionTestSteps { get; } = [];
+
+    private void UpdateConnectionTestProgress(ConnectionTestProgress update)
+    {
+        ConnectionTestStage = update.Stage.ToString();
+        ConnectionTestProgress = update.Percent;
+        foreach (var step in update.Steps)
+        {
+            if (!ConnectionTestSteps.Contains(step)) ConnectionTestSteps.Add(step);
+        }
+
+        StatusMessage = update.Message;
+    }
+
+    private Task CancelConnectionTestAsync()
+    {
+        _connectionTestCts?.Cancel();
+        return Task.CompletedTask;
     }
 
     private async Task ApplyAsync()
@@ -212,7 +368,11 @@ public partial class MainViewModel : ObservableObject
         }
 
         SelectedProfile.Url = parts.Url;
-        if (!string.IsNullOrWhiteSpace(parts.UserName))
+        if (!string.IsNullOrWhiteSpace(UsernameInput))
+        {
+            SelectedProfile.UserName = UsernameInput;
+        }
+        else if (!string.IsNullOrWhiteSpace(parts.UserName))
         {
             SelectedProfile.UserName = parts.UserName;
         }
@@ -241,7 +401,9 @@ public partial class MainViewModel : ObservableObject
                 SelectedProfile.NetworkCachingMs,
                 SelectedProfile.DisplayMode,
                 SelectedMonitor.PersistentId,
-                Environment.ProcessId));
+                Environment.ProcessId,
+                SelectedProfile.HardwareDecode,
+                SelectedProfile.MuteAudio));
             SelectedProfile.LastStatus = PlaybackStatus.Starting;
             OnPropertyChanged(nameof(CurrentProfileStatus));
             StatusMessage = "Rendererへ設定を送信しました。最初の映像出力とデスクトップ配置を確認しています。";

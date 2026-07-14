@@ -1,6 +1,7 @@
 using System.Text.Json;
 using LibVLCSharp.Shared;
 using RTSPWallpaperStudio.Core.Domain;
+using RTSPWallpaperStudio.Core.Services;
 using RTSPWallpaperStudio.Interop;
 
 namespace RTSPWallpaperStudio.Renderer;
@@ -25,6 +26,7 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
     }
 
     public bool IsRunning => _player is not null;
+    public bool IsAttached { get; private set; }
 
     public async Task<bool> StartAsync(RendererStartOptions options, bool recoverShell = false, CancellationToken cancellationToken = default)
     {
@@ -37,6 +39,7 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
         }
 
         await StopPlayerAsync();
+        IsAttached = false;
         _lastMediaError = null;
         try
         {
@@ -52,12 +55,13 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
             _player.Buffering += OnBuffering;
 
             await ReportAsync(RendererEventType.StreamOpening);
-            var location = BuildLocation(options);
+            var playbackOptions = new RtspPlaybackOptions(options.Url, options.UserName, options.Password,
+                options.Transport, options.NetworkCachingMs, options.HardwareDecode, options.MuteAudio);
+            var location = RtspLocationBuilder.Build(playbackOptions.Url, playbackOptions.UserName, playbackOptions.Password);
             _media = new Media(_libVlc, location, FromType.FromLocation);
-            _media.AddOption($":network-caching={Math.Clamp(options.NetworkCachingMs, 50, 5000)}");
-            if (options.Transport == TransportMode.Tcp)
+            foreach (var option in RtspPlaybackOptionsFactory.CreateMediaOptions(playbackOptions))
             {
-                _media.AddOption(":rtsp-tcp");
+                _media.AddOption(option);
             }
 
             if (!_player.Play(_media))
@@ -98,6 +102,7 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
             }
 
             _window.ShowAfterValidation();
+            IsAttached = true;
             await ReportAsync(RendererEventType.WallpaperVisible, userMessage: "壁紙を表示しました。", metrics: BuildMetrics(attach.Discovery));
             await ReportAsync(RendererEventType.PlaybackRunning, userMessage: "再生中です。", metrics: BuildMetrics(attach.Discovery));
             return true;
@@ -193,6 +198,7 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
 
     private async Task StopPlayerAsync()
     {
+        IsAttached = false;
         if (_player is not null)
         {
             _player.EncounteredError -= OnEncounteredError;
@@ -248,23 +254,4 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
         _report(new RendererEvent(Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture), type, DateTimeOffset.UtcNow,
             errorCode, userMessage, technicalDetails, metrics));
 
-    private static string BuildLocation(RendererStartOptions options)
-    {
-        if (!Uri.TryCreate(options.Url, UriKind.Absolute, out var uri))
-        {
-            throw new InvalidOperationException("RTSP URLが正しくありません。");
-        }
-
-        if (string.IsNullOrEmpty(options.UserName))
-        {
-            return uri.ToString();
-        }
-
-        var builder = new UriBuilder(uri)
-        {
-            UserName = options.UserName,
-            Password = options.Password ?? string.Empty
-        };
-        return builder.Uri.ToString();
-    }
 }

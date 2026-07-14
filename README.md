@@ -14,7 +14,10 @@ RTSP映像を、Windowsデスクトップアイコンの背面にあるWorkerW�
 - First Frame Gate：映像出力が確認されるまでRendererは表示しない
 - Job Object、親PID監視、runtime-state.json、Ctrl + Alt + Shift + F12緊急停止
 - モニター列挙、永続ID生成、Fill / Fit / Stretch / Center / 1:1のレイアウト計算
-- LibVLCによるRTSPメディア解析と映像トラック検証
+- Rendererと同じLibVLC経路を使うRTSP接続テスト（Playing + VoutCount > 0のFirst Frame Gate）
+- TCP / UDP / 自動方式、ネットワークキャッシュ、ハードウェアデコード設定の共通化
+- 起動時の `C:\go2rtc\go2rtc.exe` 自動起動、8554待受確認、アプリ所有プロセスの安全な終了
+- 接続テストの段階表示、キャンセル、具体的なエラーコード、認証情報の優先順位表示
 - 日次ファイルログ、診断ページ、ライト/ダークテーマ
 - DPAPI CurrentUserによるパスワード暗号化
 - アトミックなJSON設定保存と1世代バックアップ
@@ -34,10 +37,29 @@ RTSP映像を、Windowsデスクトップアイコンの背面にあるWorkerW�
 1. `RTSPWallpaperStudio.App.exe`を起動します。
 2. URL欄にRTSP URLを入力します。初期例は `rtsp://127.0.0.1:8554/switchbot3mp` です。
 3. 対象ディスプレイを選択します。
-4. 必要に応じて「接続テスト」を実行します。
-5. 「壁紙に設定」を押します。
+4. 「接続テスト」を実行します。成功条件はTCPポートの開通だけではなく、LibVLCの再生状態と映像出力です。
+5. 成功後に「テスト成功後に壁紙へ設定」を押します。失敗時は壁紙を表示しません。
 
-このSwitchBot 3MP形式のURLは、ローカルRTSP中継サービスが起動している場合の入力例です。SwitchBot公式機能そのものを保証するURLではありません。
+このSwitchBot 3MP形式のURLは、ローカルRTSP中継サービスが起動している場合の入力例です。アプリは起動時に `C:\go2rtc\go2rtc.exe` を探し、8554が未使用なら非表示で起動して待受を確認します。既に別プロセスが8554を使用している場合は、そのプロセスを終了させません。SwitchBot公式機能そのものを保証するURLではありません。
+
+接続テストは、入力欄のユーザー名・パスワード、URL内の認証情報、保存済みDPAPIパスワードの順に採用します。保存・ログ・診断情報にはパスワード、トークン、完全な認証付きURLを残しません。`Transport=Automatic` はTCP再生を試してからLibVLC自動方式を再試行します。UDP指定と自動方式に `:rtsp-tcp` は付加しません。
+
+実接続診断は次の補助スクリプトで行えます。
+
+```powershell
+.\tools\start-test-rtsp.ps1
+```
+
+ユーザーURLのポートが未使用の場合、スクリプトはMediaMTXとFFmpegの合成H.264配信を入力URLのポートに準備します。確認結果は `artifacts\qa\` に保存します。再現性確認用の診断CLIは次で実行できます。
+
+```powershell
+dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.Diagnostics.csproj -c Release -p:Platform=x64 -- --url rtsp://127.0.0.1:8554/switchbot3mp --transport tcp --timeout 10
+dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.Diagnostics.csproj -c Release -p:Platform=x64 -- --url rtsp://127.0.0.1:8554/test --transport tcp --timeout 10 --wallpaper
+dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.Diagnostics.csproj -c Release -p:Platform=x64 -- --start-go2rtc --url rtsp://127.0.0.1:8554/switchbot3mp --transport tcp --timeout 15 --wallpaper
+dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.Diagnostics.csproj -c Release -p:Platform=x64 -- --ipc-smoke
+```
+
+`--wallpaper` を付けると、接続テスト成功後にRendererを起動し、`WallpaperVisible`イベントを受信してから停止します。`--start-go2rtc` は `C:\go2rtc\go2rtc.exe` を診断プロセスの所有下で起動し、検証終了時にそれだけを停止します。`--ipc-smoke` はRTSP接続を省略してRendererのNamed Pipe接続、Ready/Heartbeat/停止イベントだけを検証します。GUIを使わないため、CI・障害再現・ログ採取に利用できます。
 
 ## ビルド
 
@@ -74,7 +96,7 @@ MSIXは `installer\msix\build-msix.ps1` を使います。開発用自己署名�
 
 - Windowsには動画壁紙用の安定した公開APIがなく、WorkerWは非公開Shell挙動に依存します。Windows大型更新で修正が必要になる可能性があります。
 - 実機RTSP映像、Explorer再起動後の10秒以内復旧、画面ロック/スリープ、モニター抜き差しの実機QAは未実施です。
-- GUIの現在版は1プロファイル・1 Rendererを中心とした基本フローです。複数Rendererによる複製・スパンの実行制御、タスクトレイ、MSIX自動更新、診断ZIPは今後の拡張対象です。
+- GUIの現在版は1プロファイル・1 Rendererを中心とした基本フローです。複数Rendererによる複製・スパンの実行制御、MSIX自動更新、診断ZIPは今後の拡張対象です。
 - DRM保護映像、RTSPサーバーの接続数制限、GPUドライバー依存のハードウェアデコードは対象環境の制約を受けます。
 - 本プロジェクトは商用配布前のライセンス確認を代替しません。LibVLC/LibVLCSharpの配布条件を確認してください。
 

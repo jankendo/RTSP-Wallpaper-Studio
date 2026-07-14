@@ -7,6 +7,7 @@ namespace RTSPWallpaperStudio.Renderer;
 
 internal sealed class RendererIpcClient : IAsyncDisposable
 {
+    private static readonly Encoding IpcEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
     private readonly string _pipeName;
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private NamedPipeClientStream? _pipe;
@@ -18,11 +19,22 @@ internal sealed class RendererIpcClient : IAsyncDisposable
     public async Task ConnectAsync(CancellationToken cancellationToken)
     {
         _pipe = new NamedPipeClientStream(".", _pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(5));
-        await _pipe.ConnectAsync(timeout.Token);
-        _reader = new StreamReader(_pipe, Encoding.UTF8, leaveOpen: true);
-        _writer = new StreamWriter(_pipe, Encoding.UTF8, leaveOpen: true) { AutoFlush = true, NewLine = "\n" };
+        try
+        {
+            // The Windows named-pipe cancellation overload can remain pending on some
+            // desktop configurations. Use an explicit timeout so a broken renderer
+            // never leaves the parent waiting forever.
+            await _pipe.ConnectAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+        }
+        catch
+        {
+            await _pipe.DisposeAsync();
+            _pipe = null;
+            throw;
+        }
+
+        _reader = new StreamReader(_pipe, IpcEncoding, leaveOpen: true);
+        _writer = new StreamWriter(_pipe, IpcEncoding, leaveOpen: true) { AutoFlush = true, NewLine = "\n" };
     }
 
     public async Task RunCommandLoopAsync(Func<IpcMessage, Task> handler, CancellationToken cancellationToken)

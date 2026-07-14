@@ -59,10 +59,11 @@ public static partial class RtspUrlService
             return "<empty-or-invalid-rtsp-url>";
         }
 
+        var hasCredentials = !string.IsNullOrEmpty(uri.UserInfo);
         var builder = new UriBuilder(uri)
         {
-            UserName = string.IsNullOrEmpty(uri.UserInfo) ? string.Empty : Uri.UnescapeDataString(uri.UserInfo.Split(':')[0]),
-            Password = "***",
+            UserName = hasCredentials ? Uri.UnescapeDataString(uri.UserInfo.Split(':')[0]) : string.Empty,
+            Password = hasCredentials ? "***" : string.Empty,
             Query = string.IsNullOrEmpty(uri.Query) ? string.Empty : "?<redacted>"
         };
         return builder.Uri.ToString();

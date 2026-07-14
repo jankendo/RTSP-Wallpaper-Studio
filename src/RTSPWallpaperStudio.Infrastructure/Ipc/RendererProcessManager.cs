@@ -11,6 +11,7 @@ namespace RTSPWallpaperStudio.Infrastructure.Ipc;
 
 public sealed class RendererProcessManager : IAsyncDisposable
 {
+    private static readonly Encoding IpcEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
     private readonly ILogger<RendererProcessManager> _logger;
     private readonly List<RendererSession> _sessions = [];
     private readonly object _sessionsLock = new();
@@ -32,7 +33,7 @@ public sealed class RendererProcessManager : IAsyncDisposable
             PipeDirection.InOut,
             1,
             PipeTransmissionMode.Byte,
-            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+            PipeOptions.Asynchronous);
 
         var process = Process.Start(new ProcessStartInfo
         {
@@ -44,6 +45,10 @@ public sealed class RendererProcessManager : IAsyncDisposable
                 $"--renderer-id \"{rendererId}\""),
             UseShellExecute = false,
             CreateNoWindow = true,
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+            StandardErrorEncoding = Encoding.UTF8,
+            StandardOutputEncoding = Encoding.UTF8,
             WorkingDirectory = AppContext.BaseDirectory
         });
         if (process is null)
@@ -51,6 +56,23 @@ public sealed class RendererProcessManager : IAsyncDisposable
             await server.DisposeAsync();
             throw new InvalidOperationException("Rendererプロセスを起動できませんでした。");
         }
+
+        process.ErrorDataReceived += (_, eventArgs) =>
+        {
+            if (!string.IsNullOrWhiteSpace(eventArgs.Data))
+            {
+                _logger.LogWarning("Renderer stderr: {Line}", eventArgs.Data);
+            }
+        };
+        process.OutputDataReceived += (_, eventArgs) =>
+        {
+            if (!string.IsNullOrWhiteSpace(eventArgs.Data))
+            {
+                _logger.LogInformation("Renderer stdout: {Line}", eventArgs.Data);
+            }
+        };
+        process.BeginErrorReadLine();
+        process.BeginOutputReadLine();
 
         var job = new WindowsJobObject(_logger);
         var session = new RendererSession(process, server, job, rendererId, _logger, PublishEvent);
@@ -61,13 +83,17 @@ public sealed class RendererProcessManager : IAsyncDisposable
 
         try
         {
+            _logger.LogInformation("Renderer IPC接続を待機します。PID={Pid} Pipe={PipeName}", process.Id, pipeName);
+            await session.ConnectAsync(cancellationToken).WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
+            _logger.LogInformation("Renderer IPC接続が完了しました。PID={Pid}", process.Id);
+            // Assign only after the child has connected. This avoids a Windows job
+            // boundary interfering with the initial named-pipe handshake.
             job.Assign(process);
-            await session.ConnectAsync(cancellationToken);
             session.StartEventLoop(cancellationToken);
             await session.SendAsync(new IpcMessage(
                 IpcMessageKind.Command,
                 "start",
-                JsonSerializer.Serialize(options)), cancellationToken);
+                JsonSerializer.Serialize(options)), cancellationToken).WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
             _logger.LogInformation("Rendererを起動しました。PID={Pid} Monitor={MonitorId} RendererId={RendererId}",
                 process.Id, options.MonitorId, rendererId);
         }
@@ -141,15 +167,24 @@ public sealed class RendererProcessManager : IAsyncDisposable
             return local;
         }
 
-        var candidate = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "RTSPWallpaperStudio.Renderer", "bin", "x64", "Debug", "net10.0-windows10.0.19041.0", "RTSPWallpaperStudio.Renderer.exe"));
-        return File.Exists(candidate) ? candidate : throw new FileNotFoundException("Renderer実行ファイルが見つかりません。Portable配置では同じフォルダーへ配置してください。", candidate);
+        var projectRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "RTSPWallpaperStudio.Renderer", "bin", "x64"));
+        foreach (var configuration in new[] { "Release", "Debug" })
+        {
+            var candidate = Path.Combine(projectRoot, configuration, "net10.0-windows10.0.19041.0", "RTSPWallpaperStudio.Renderer.exe");
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        throw new FileNotFoundException("Renderer実行ファイルが見つかりません。Portable配置では同じフォルダーへ配置してください。", projectRoot);
     }
 
     private sealed class RendererSession : IAsyncDisposable
     {
         private readonly NamedPipeServerStream _pipe;
-        private readonly StreamReader _reader;
-        private readonly StreamWriter _writer;
+        private StreamReader? _reader;
+        private StreamWriter? _writer;
         private readonly WindowsJobObject _job;
         private readonly ILogger _logger;
         private readonly Action<RendererEvent> _eventSink;
@@ -162,8 +197,6 @@ public sealed class RendererProcessManager : IAsyncDisposable
         {
             Process = process;
             _pipe = pipe;
-            _reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
-            _writer = new StreamWriter(pipe, Encoding.UTF8, leaveOpen: true) { AutoFlush = true, NewLine = "\n" };
             _job = job;
             RendererId = rendererId;
             _logger = logger;
@@ -173,7 +206,15 @@ public sealed class RendererProcessManager : IAsyncDisposable
         public Process Process { get; }
         public string RendererId { get; }
 
-        public Task ConnectAsync(CancellationToken cancellationToken) => _pipe.WaitForConnectionAsync(cancellationToken);
+        public async Task ConnectAsync(CancellationToken cancellationToken)
+        {
+            // Use the synchronous Win32 wait on a worker thread. On some Windows
+            // desktop builds WaitForConnectionAsync can remain pending even while
+            // a compatible client is already trying to connect.
+            await Task.Run(_pipe.WaitForConnection, cancellationToken);
+            _reader = new StreamReader(_pipe, IpcEncoding, leaveOpen: true);
+            _writer = new StreamWriter(_pipe, IpcEncoding, leaveOpen: true) { AutoFlush = true, NewLine = "\n" };
+        }
 
         public void StartEventLoop(CancellationToken cancellationToken)
         {
@@ -185,7 +226,8 @@ public sealed class RendererProcessManager : IAsyncDisposable
             await _writeLock.WaitAsync(cancellationToken);
             try
             {
-                await _writer.WriteLineAsync(IpcProtocol.Serialize(message)).WaitAsync(cancellationToken);
+                var writer = _writer ?? throw new InvalidOperationException("Renderer IPC pipe is not connected.");
+                await writer.WriteLineAsync(IpcProtocol.Serialize(message)).WaitAsync(cancellationToken);
             }
             finally
             {
@@ -210,6 +252,8 @@ public sealed class RendererProcessManager : IAsyncDisposable
         public async ValueTask DisposeAsync()
         {
             _lifetime.Cancel();
+            _writer?.Dispose();
+            _reader?.Dispose();
             _pipe.Dispose();
             if (!Process.HasExited)
             {
@@ -229,8 +273,6 @@ public sealed class RendererProcessManager : IAsyncDisposable
                 try { await _eventLoop.WaitAsync(TimeSpan.FromSeconds(1)); } catch (Exception) { }
             }
 
-            _writer.Dispose();
-            _reader.Dispose();
             _writeLock.Dispose();
             _lifetime.Dispose();
             _job.Dispose();
@@ -239,12 +281,13 @@ public sealed class RendererProcessManager : IAsyncDisposable
 
         private async Task ReadEventsAsync(CancellationToken externalCancellationToken)
         {
+            var reader = _reader ?? throw new InvalidOperationException("Renderer IPC pipe is not connected.");
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(externalCancellationToken, _lifetime.Token);
             try
             {
                 while (!linked.IsCancellationRequested)
                 {
-                    var line = await _reader.ReadLineAsync(linked.Token);
+                    var line = await reader.ReadLineAsync(linked.Token);
                     if (line is null)
                     {
                         return;
@@ -252,6 +295,7 @@ public sealed class RendererProcessManager : IAsyncDisposable
 
                     if (!IpcProtocol.TryDeserializeMessage(line, out var message) || message is null || message.Kind != IpcMessageKind.Event || string.IsNullOrWhiteSpace(message.Payload))
                     {
+                        _logger.LogWarning("Renderer IPCイベントを解釈できません。PID={Pid} RawLength={Length}", Process.Id, line.Length);
                         continue;
                     }
 

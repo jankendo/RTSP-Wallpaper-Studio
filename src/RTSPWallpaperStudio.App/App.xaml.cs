@@ -7,6 +7,7 @@ using RTSPWallpaperStudio.Infrastructure.Diagnostics;
 using RTSPWallpaperStudio.Infrastructure.Ipc;
 using RTSPWallpaperStudio.Infrastructure.Logging;
 using RTSPWallpaperStudio.Infrastructure.Paths;
+using RTSPWallpaperStudio.Infrastructure.Relay;
 using RTSPWallpaperStudio.Infrastructure.Security;
 using RTSPWallpaperStudio.Infrastructure.Settings;
 using RTSPWallpaperStudio.Interop;
@@ -52,11 +53,13 @@ public partial class App : System.Windows.Application
                 services.AddSingleton<DesktopMonitorProvider>();
                 services.AddSingleton<RuntimeStateStore>();
                 services.AddSingleton<RendererProcessManager>();
+                services.AddSingleton<Go2RtcProcessManager>();
                 services.AddSingleton<MainViewModel>();
             })
             .Build();
 
         await _host.StartAsync();
+        await _host.Services.GetRequiredService<Go2RtcProcessManager>().EnsureStartedAsync();
         _viewModel = _host.Services.GetRequiredService<MainViewModel>();
         var window = new MainWindow(_viewModel);
         MainWindow = window;
@@ -74,6 +77,7 @@ public partial class App : System.Windows.Application
                 Task.Run(async () =>
                 {
                     await host.Services.GetRequiredService<RendererProcessManager>().StopAllAsync().ConfigureAwait(false);
+                    await host.Services.GetRequiredService<Go2RtcProcessManager>().StopOwnedAsync().ConfigureAwait(false);
                     if (viewModel is not null)
                     {
                         await viewModel.MarkCleanShutdownAsync().ConfigureAwait(false);
