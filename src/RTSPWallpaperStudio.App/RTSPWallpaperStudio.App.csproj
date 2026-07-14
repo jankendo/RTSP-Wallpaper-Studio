@@ -2,6 +2,7 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <RootNamespace>RTSPWallpaperStudio.App</RootNamespace>
     <AssemblyName>RTSPWallpaperStudio.App</AssemblyName>

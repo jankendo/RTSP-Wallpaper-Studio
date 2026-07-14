@@ -2,18 +2,20 @@
 
 RTSP映像を、Windowsデスクトップアイコンの背面にあるWorkerWへネイティブ動画ウィンドウとして配置する、Windows 10/11 x64向けのライブ壁紙アプリです。
 
-> 現在は公開開発版です。通常のRTSP接続・URL検証・DPAPI資格情報保護・Renderer分離・WorkerW配置を実装していますが、実機カメラでの長時間再生、Explorer再起動、マルチモニター抜き差し、MSIX署名は未検証です。
+> 現在は公開開発版です。純Win32 Renderer、First Frame Gate、WorkerW/Raised Desktopの安全なAttach transaction、双方向IPC、安全停止と診断GUIを実装しています。実機カメラでの長時間再生、Explorer再起動、マルチモニター抜き差し、MSIX署名は未検証です。
 
 ## 主な機能
 
 - WPF製の日本語GUI
 - `rtsp://` / `rtsps://` URLの検証と資格情報分離
 - LibVLCSharpによるRenderer別プロセス再生
-- WorkerWへの壁紙ウィンドウ配置
-- 現在ユーザー限定のNamed Pipe IPC
-- Explorer/親プロセス消失を意識したRendererヘルス監視
+- WorkerW / Raised Desktopへの壁紙ウィンドウ配置（実親・スタイル・矩形・Z順の検証付き）
+- Appが先に作る現在ユーザー限定の双方向Named Pipe IPC
+- First Frame Gate：映像出力が確認されるまでRendererは表示しない
+- Job Object、親PID監視、runtime-state.json、Ctrl + Alt + Shift + F12緊急停止
 - モニター列挙、永続ID生成、Fill / Fit / Stretch / Center / 1:1のレイアウト計算
-- TCP接続テストと利用者向けエラー表示
+- LibVLCによるRTSPメディア解析と映像トラック検証
+- 日次ファイルログ、診断ページ、ライト/ダークテーマ
 - DPAPI CurrentUserによるパスワード暗号化
 - アトミックなJSON設定保存と1世代バックアップ
 - xUnit単体テスト、Windows統合テスト、GitHub Actions
@@ -63,6 +65,7 @@ MSIXは `installer\msix\build-msix.ps1` を使います。開発用自己署名�
 %LOCALAPPDATA%\RTSPWallpaperStudio\Logs\
 %LOCALAPPDATA%\RTSPWallpaperStudio\CrashReports\
 %LOCALAPPDATA%\RTSPWallpaperStudio\Screenshots\
+%LOCALAPPDATA%\RTSPWallpaperStudio\runtime-state.json
 ```
 
 パスワードはDPAPIのCurrentUserスコープで暗号化します。認証付きURLは保存前にユーザー名・パスワードを分離し、ログへ出す場合はパスワードとクエリを伏せます。
@@ -71,7 +74,7 @@ MSIXは `installer\msix\build-msix.ps1` を使います。開発用自己署名�
 
 - Windowsには動画壁紙用の安定した公開APIがなく、WorkerWは非公開Shell挙動に依存します。Windows大型更新で修正が必要になる可能性があります。
 - 実機RTSP映像、Explorer再起動後の10秒以内復旧、画面ロック/スリープ、モニター抜き差しの実機QAは未実施です。
-- GUIの現在版は1プロファイル・1 Rendererを中心とした基本フローです。複数Rendererによる複製・スパンのUI制御、タスクトレイ、MSIX自動更新、診断ZIPは今後の拡張対象です。
+- GUIの現在版は1プロファイル・1 Rendererを中心とした基本フローです。複数Rendererによる複製・スパンの実行制御、タスクトレイ、MSIX自動更新、診断ZIPは今後の拡張対象です。
 - DRM保護映像、RTSPサーバーの接続数制限、GPUドライバー依存のハードウェアデコードは対象環境の制約を受けます。
 - 本プロジェクトは商用配布前のライセンス確認を代替しません。LibVLC/LibVLCSharpの配布条件を確認してください。
 

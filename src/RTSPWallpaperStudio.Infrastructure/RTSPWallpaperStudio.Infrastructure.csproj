@@ -7,6 +7,8 @@
     <ProjectReference Include="..\RTSPWallpaperStudio.Core\RTSPWallpaperStudio.Core.csproj" />
     <ProjectReference Include="..\RTSPWallpaperStudio.Interop\RTSPWallpaperStudio.Interop.csproj" />
     <PackageReference Include="Microsoft.Extensions.Logging" />
+    <PackageReference Include="LibVLCSharp" />
+    <PackageReference Include="VideoLAN.LibVLC.Windows" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" />
   </ItemGroup>
 </Project>

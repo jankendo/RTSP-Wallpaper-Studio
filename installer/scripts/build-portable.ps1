@@ -22,9 +22,27 @@ New-Item -ItemType Directory -Path $appPublish, $rendererPublish | Out-Null
 dotnet publish $appProject -c $Configuration -r win-x64 --self-contained true -p:Platform=x64 -p:PublishSingleFile=false -o $appPublish
 dotnet publish $rendererProject -c $Configuration -r win-x64 --self-contained true -p:Platform=x64 -p:PublishSingleFile=false -o $rendererPublish
 
-Get-ChildItem -LiteralPath $rendererPublish -File | Copy-Item -Destination $appPublish -Force
+# Merge Renderer dependencies without overwriting the App's WPF framework assemblies.
+# Both self-contained publishes can contain identically named framework files, but the
+# App's implementation must win over Renderer reference/resource assemblies.
+Get-ChildItem -LiteralPath $rendererPublish -File | ForEach-Object {
+    $destination = Join-Path $appPublish $_.Name
+    if (-not (Test-Path -LiteralPath $destination)) {
+        Copy-Item -LiteralPath $_.FullName -Destination $destination
+    }
+}
 Get-ChildItem -LiteralPath $rendererPublish -Directory | ForEach-Object {
-    Copy-Item -LiteralPath $_.FullName -Destination $appPublish -Recurse -Force
+    $sourceRoot = $_.FullName
+    $rootDirectoryName = $_.Name
+    Get-ChildItem -LiteralPath $sourceRoot -Recurse -File | ForEach-Object {
+        $relative = $_.FullName.Substring($sourceRoot.Length).TrimStart('\')
+        $destination = Join-Path (Join-Path $appPublish $rootDirectoryName) $relative
+        $destinationDirectory = Split-Path -Parent $destination
+        New-Item -ItemType Directory -Path $destinationDirectory -Force | Out-Null
+        if (-not (Test-Path -LiteralPath $destination)) {
+            Copy-Item -LiteralPath $_.FullName -Destination $destination
+        }
+    }
 }
 Copy-Item -LiteralPath (Join-Path $root "README.md") -Destination $appPublish -Force
 Copy-Item -LiteralPath (Join-Path $root "THIRD-PARTY-NOTICES.txt") -Destination $appPublish -Force
