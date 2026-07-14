@@ -18,7 +18,7 @@ internal static class Program
         var options = Parse(args);
         if (options.ShowHelp)
         {
-            Console.WriteLine("Usage: RTSPWallpaperStudio.Diagnostics.exe --url <rtsp-url> [--transport tcp|udp|automatic] [--timeout 10] [--cache 300] [--start-go2rtc] [--wallpaper] [--hold-seconds 30] [--ipc-smoke]");
+            Console.WriteLine("Usage: RTSPWallpaperStudio.Diagnostics.exe --url <rtsp-url> [--transport tcp|udp|automatic] [--timeout 10] [--cache 300] [--start-go2rtc] [--wallpaper|--wallpaper-only] [--hold-seconds 30] [--ipc-smoke]");
             Console.WriteLine("       RTSPWallpaperStudio.Diagnostics.exe --startup-status");
             Console.WriteLine("       RTSPWallpaperStudio.Diagnostics.exe --startup-enable [--startup-exe <RTSPWallpaperStudio.App.exe>]");
             Console.WriteLine("       RTSPWallpaperStudio.Diagnostics.exe --startup-disable");
@@ -53,6 +53,11 @@ internal static class Program
             return await RunIpcSmokeAsync(options, relay);
         }
 
+        if (options.WallpaperOnly)
+        {
+            return await RunWallpaperOnlyAsync(options, relay);
+        }
+
         var request = new ConnectionTestRequest(options.Url, options.UserName, options.Password,
             options.Transport, options.CacheMs, options.TimeoutSeconds, options.HardwareDecode, true);
         var tester = new ConnectionTester();
@@ -80,7 +85,10 @@ internal static class Program
             var wallpaperResult = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             rendererManager.RendererEventReceived += (_, rendererEvent) =>
             {
-                Console.Error.WriteLine($"[renderer] {rendererEvent.Type} code={rendererEvent.ErrorCode ?? "-"} message={rendererEvent.UserMessage ?? "-"}");
+                var metrics = rendererEvent.Metrics is { } m
+                    ? $" metrics=state:{m.MediaState},vout:{m.VoutCount},time:{m.MediaTimeMs},age:{m.VideoProgressAgeSeconds:0.0}s,reconnect:{m.ReconnectCount}"
+                    : string.Empty;
+                Console.Error.WriteLine($"[renderer] {rendererEvent.Type} code={rendererEvent.ErrorCode ?? "-"} message={rendererEvent.UserMessage ?? "-"}{metrics} details={rendererEvent.TechnicalDetails ?? "-"}");
                 if (rendererEvent.Type == RendererEventType.WallpaperVisible)
                 {
                     wallpaperResult.TrySetResult(true);
@@ -135,6 +143,7 @@ internal static class Program
         string? password = null;
         var startGo2Rtc = false;
         var wallpaper = false;
+        var wallpaperOnly = false;
         var ipcSmoke = false;
         var holdSeconds = 0;
         string? startupAction = null;
@@ -152,6 +161,7 @@ internal static class Program
                 case "--cache": cache = int.Parse(args[++i], CultureInfo.InvariantCulture); break;
                 case "--start-go2rtc": startGo2Rtc = true; break;
                 case "--wallpaper": wallpaper = true; break;
+                case "--wallpaper-only": wallpaper = true; wallpaperOnly = true; break;
                 case "--ipc-smoke": ipcSmoke = true; break;
                 case "--hold-seconds": holdSeconds = Math.Clamp(int.Parse(args[++i], CultureInfo.InvariantCulture), 0, 3600); break;
                 case "--startup-status": startupAction = "status"; break;
@@ -164,7 +174,7 @@ internal static class Program
             }
         }
 
-        return new DiagnosticOptions(url, user, password, transport, timeout, cache, hardware, startGo2Rtc, wallpaper, ipcSmoke,
+        return new DiagnosticOptions(url, user, password, transport, timeout, cache, hardware, startGo2Rtc, wallpaper, wallpaperOnly, ipcSmoke,
             holdSeconds, startupAction, startupExecutable, help);
     }
 
@@ -183,6 +193,67 @@ internal static class Program
         return result.Success ? 0 : 21;
     }
 
+    private static async Task<int> RunWallpaperOnlyAsync(DiagnosticOptions options, Go2RtcProcessManager? relay)
+    {
+        using var loggerFactory = LoggerFactory.Create(builder => builder.AddSimpleConsole().SetMinimumLevel(LogLevel.Information));
+        await using var rendererManager = new RendererProcessManager(loggerFactory.CreateLogger<RendererProcessManager>());
+        try
+        {
+            var monitor = new DesktopMonitorProvider().GetMonitors().FirstOrDefault();
+            if (monitor is null)
+            {
+                Console.Error.WriteLine("WALLPAPER_RESULT=FAILED code=NO_MONITOR");
+                return 11;
+            }
+
+            var wallpaperResult = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            rendererManager.RendererEventReceived += (_, rendererEvent) =>
+            {
+                var metrics = rendererEvent.Metrics is { } m
+                    ? $" metrics=state:{m.MediaState},vout:{m.VoutCount},time:{m.MediaTimeMs},age:{m.VideoProgressAgeSeconds:0.0}s,reconnect:{m.ReconnectCount}"
+                    : string.Empty;
+                Console.Error.WriteLine($"[renderer] {rendererEvent.Type} code={rendererEvent.ErrorCode ?? "-"} message={rendererEvent.UserMessage ?? "-"}{metrics} details={rendererEvent.TechnicalDetails ?? "-"}");
+                if (rendererEvent.Type == RendererEventType.WallpaperVisible)
+                {
+                    wallpaperResult.TrySetResult(true);
+                }
+                else if (rendererEvent.Type is RendererEventType.FatalError or RendererEventType.PlaybackError or RendererEventType.AttachmentFailed)
+                {
+                    wallpaperResult.TrySetResult(false);
+                }
+            };
+
+            var startOptions = new RendererStartOptions(options.Url, options.UserName, options.Password,
+                options.Transport, options.CacheMs, DisplayMode.Fill, monitor.PersistentId, Environment.ProcessId,
+                options.HardwareDecode, true);
+            await rendererManager.StartAsync(startOptions).WaitAsync(TimeSpan.FromSeconds(15));
+            var wallpaperSucceeded = await wallpaperResult.Task.WaitAsync(TimeSpan.FromSeconds(120));
+            Console.WriteLine($"WALLPAPER_RESULT={(wallpaperSucceeded ? "SUCCESS" : "FAILED")}");
+            if (wallpaperSucceeded && options.HoldSeconds > 0)
+            {
+                Console.WriteLine($"WALLPAPER_HOLD_SECONDS={options.HoldSeconds}");
+                await Task.Delay(TimeSpan.FromSeconds(options.HoldSeconds));
+            }
+
+            return wallpaperSucceeded ? 0 : 3;
+        }
+        catch (TimeoutException ex)
+        {
+            Console.Error.WriteLine($"WALLPAPER_RESULT=FAILED code=RTSP_RENDERER_TIMEOUT message={ex.Message}");
+            return 12;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"WALLPAPER_RESULT=FAILED code=RTSP_RENDERER_START_FAILED message={ex.Message}");
+            return 13;
+        }
+        finally
+        {
+            await rendererManager.StopAllAsync();
+            if (relay is not null) await relay.StopOwnedAsync();
+        }
+    }
+
     private static async Task<int> RunIpcSmokeAsync(DiagnosticOptions options, Go2RtcProcessManager? relay)
     {
         using var loggerFactory = LoggerFactory.Create(builder => builder.AddSimpleConsole().SetMinimumLevel(LogLevel.Information));
@@ -199,7 +270,7 @@ internal static class Program
             var result = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
             rendererManager.RendererEventReceived += (_, rendererEvent) =>
             {
-                Console.Error.WriteLine($"[renderer] {rendererEvent.Type} code={rendererEvent.ErrorCode ?? "-"}");
+                Console.Error.WriteLine($"[renderer] {rendererEvent.Type} code={rendererEvent.ErrorCode ?? "-"} details={rendererEvent.TechnicalDetails ?? "-"}");
                 if (rendererEvent.Type == RendererEventType.RendererReady)
                 {
                     result.TrySetResult("READY");
@@ -230,6 +301,6 @@ internal static class Program
     }
 
     private sealed record DiagnosticOptions(string Url, string? UserName, string? Password, TransportMode Transport,
-        int TimeoutSeconds, int CacheMs, HardwareDecodeMode HardwareDecode, bool StartGo2Rtc, bool Wallpaper, bool IpcSmoke,
+        int TimeoutSeconds, int CacheMs, HardwareDecodeMode HardwareDecode, bool StartGo2Rtc, bool Wallpaper, bool WallpaperOnly, bool IpcSmoke,
         int HoldSeconds, string? StartupAction, string? StartupExecutable, bool ShowHelp);
 }

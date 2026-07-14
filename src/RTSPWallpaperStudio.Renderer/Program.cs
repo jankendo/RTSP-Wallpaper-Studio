@@ -95,6 +95,7 @@ internal static class Program
         DesktopHostController desktopHost, RendererIpcClient ipc, CancellationToken cancellationToken)
     {
         var stallThreshold = TimeSpan.FromSeconds(8);
+        var unhealthySince = (DateTimeOffset?)null;
         while (!cancellationToken.IsCancellationRequested)
         {
             await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
@@ -119,11 +120,30 @@ internal static class Program
             if (player.IsRunning && player.IsAttached)
             {
                 var health = player.GetPlaybackHealth();
-                if (PlaybackStallDetector.IsStalled(health.IsPlaying, health.VoutCount, health.LastProgressAt,
-                    DateTimeOffset.UtcNow, stallThreshold))
+                var now = DateTimeOffset.UtcNow;
+                var unhealthy = player.HasPlaybackError || !health.IsPlaying || health.VoutCount <= 0;
+                if (unhealthy)
                 {
-                    await player.RecoverFromStallAsync(stallThreshold, cancellationToken);
+                    unhealthySince ??= now;
+                    if (now - unhealthySince.Value >= TimeSpan.FromSeconds(4))
+                    {
+                        await player.ReconnectAsync(cancellationToken);
+                        unhealthySince = null;
+                    }
                 }
+                else
+                {
+                    unhealthySince = null;
+                    if (PlaybackStallDetector.IsStalled(health.IsPlaying, health.VoutCount, health.LastProgressAt,
+                        now, stallThreshold))
+                    {
+                        await player.RecoverFromStallAsync(stallThreshold, cancellationToken);
+                    }
+                }
+            }
+            else
+            {
+                unhealthySince = null;
             }
         }
     }

@@ -9,7 +9,7 @@ App.exe
 Renderer.exe
   ├─ 純Win32の非表示トップレベルHWND（WPF VideoViewなし）
   ├─ LibVLCSharp.Shared.MediaPlayer.Hwnd
-  ├─ First Frame Gate（Playing && VoutCount > 0を連続検証）
+  ├─ First Frame Gate（Playing、VoutCount > 0、メディア時刻の安定進行を検証）
   ├─ Playback Stall Gate（映像時間の進行を監視し、8秒停止で自動再接続）
   └─ Appと双方向Named Pipeでイベント・Heartbeatを送受信
 ```

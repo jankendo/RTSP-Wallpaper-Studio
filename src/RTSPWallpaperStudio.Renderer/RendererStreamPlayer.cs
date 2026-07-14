@@ -18,8 +18,9 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
     private DesktopHostDiscoveryResult? _lastDiscovery;
     private string? _lastMediaError;
     private int _reconnectCount;
-    private long _lastMediaTimeMs = -1;
-    private long _lastProgressAtTicks;
+    private readonly PlaybackProgressTracker _progressTracker = new();
+    private readonly List<string> _progressTrace = [];
+    private readonly object _progressTraceLock = new();
     private readonly SemaphoreSlim _operationLock = new(1, 1);
 
     public RendererStreamPlayer(NativeRendererWindow window, DesktopHostController desktopHost, Func<RendererEvent, Task> report)
@@ -37,7 +38,31 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
         await _operationLock.WaitAsync(cancellationToken);
         try
         {
-            return await StartCoreAsync(options, recoverShell, cancellationToken);
+            var policy = new ReconnectPolicy();
+            const int maxAttempts = 5;
+            for (var attempt = 0; attempt < maxAttempts && !cancellationToken.IsCancellationRequested; attempt++)
+            {
+                if (await StartCoreAsync(options, recoverShell, cancellationToken, suppressTransientFailure: true))
+                {
+                    return true;
+                }
+
+                if (attempt + 1 < maxAttempts)
+                {
+                    await ReportAsync(RendererEventType.Reconnecting,
+                        userMessage: $"RTSP配信元の起動を待って再試行しています（{attempt + 2}/{maxAttempts}）。");
+                    await Task.Delay(policy.GetDelay(attempt, jitterFactor: 0.1, randomUnit: 0.5), cancellationToken);
+                }
+            }
+
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                await ReportAsync(RendererEventType.FatalError, RendererErrorCodes.RtspOpenFailed,
+                    "RTSP配信元が起動しないため、壁紙を設定できません。",
+                    "初回接続を5回試行しました。go2rtc、カメラ、URL、認証情報を確認してください。");
+            }
+
+            return false;
         }
         finally
         {
@@ -45,7 +70,8 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
         }
     }
 
-    private async Task<bool> StartCoreAsync(RendererStartOptions options, bool recoverShell, CancellationToken cancellationToken)
+    private async Task<bool> StartCoreAsync(RendererStartOptions options, bool recoverShell, CancellationToken cancellationToken,
+        bool suppressTransientFailure = false)
     {
         _lastOptions = options;
         _window.Hide();
@@ -58,6 +84,11 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
         await StopPlayerAsync();
         IsAttached = false;
         _lastMediaError = null;
+        _progressTracker.Reset();
+        lock (_progressTraceLock)
+        {
+            _progressTrace.Clear();
+        }
         try
         {
             LibVLCSharp.Shared.Core.Initialize();
@@ -71,8 +102,6 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
             _player.EncounteredError += OnEncounteredError;
             _player.Buffering += OnBuffering;
             _player.TimeChanged += OnTimeChanged;
-            Interlocked.Exchange(ref _lastMediaTimeMs, -1);
-            Interlocked.Exchange(ref _lastProgressAtTicks, DateTimeOffset.UtcNow.Ticks);
 
             await ReportAsync(RendererEventType.StreamOpening);
             var playbackOptions = new RtspPlaybackOptions(options.Url, options.UserName, options.Password,
@@ -86,8 +115,9 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
 
             if (!_player.Play(_media))
             {
-                return await FailAsync(RendererErrorCodes.RtspOpenFailed,
-                    "RTSP映像を開始できませんでした。", "MediaPlayer.Playがfalseを返しました。", cancellationToken);
+                return await FailStartAsync(RendererErrorCodes.RtspOpenFailed,
+                    "RTSP映像を開始できませんでした。", "MediaPlayer.Playがfalseを返しました。", cancellationToken,
+                    suppressTransientFailure);
             }
 
             var outputReady = await WaitForVideoOutputAsync(cancellationToken);
@@ -97,11 +127,15 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
                 var message = code == RendererErrorCodes.RtspFirstFrameTimeout
                     ? "最初の映像出力を確認できませんでした。Rendererは表示していません。"
                     : "RTSPストリームで再生エラーが発生しました。";
-                return await FailAsync(code, message, _lastMediaError ?? "15秒以内にPlayingかつVoutCount>0になりませんでした。", cancellationToken);
+                var health = GetPlaybackHealth();
+                return await FailStartAsync(code, message,
+                    $"{_lastMediaError ?? "15秒以内に安定した映像進行を確認できませんでした。"} health={health.ToDiagnosticString()} trace={GetProgressTrace()}",
+                    cancellationToken, suppressTransientFailure);
             }
 
             await ReportAsync(RendererEventType.MediaParsed, userMessage: "LibVLCのメディア解析が完了しました。");
             await ReportAsync(RendererEventType.VideoTrackDetected, userMessage: "映像トラックを検出しました。");
+            _lastMediaError = null;
             await ReportAsync(RendererEventType.VideoOutputReady, userMessage: "最初の映像出力を検出しました。壁紙配置を開始します。", metrics: BuildMetrics(null));
             var attach = _desktopHost.Attach(_window.Hwnd, FindMonitor(options.MonitorId));
             if (!attach.Success)
@@ -130,7 +164,8 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            await FailAsync(RendererErrorCodes.VlcInitFailed, "Rendererを初期化できませんでした。", ex.ToString(), cancellationToken);
+            await FailStartAsync(RendererErrorCodes.VlcInitFailed, "Rendererを初期化できませんでした。", ex.ToString(), cancellationToken,
+                suppressTransientFailure);
             return false;
         }
     }
@@ -140,7 +175,7 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
         await _operationLock.WaitAsync(cancellationToken);
         try
         {
-            return await ReconnectCoreAsync(cancellationToken);
+            return await ReconnectCoreAsync(true, cancellationToken);
         }
         finally
         {
@@ -188,7 +223,7 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
 
             await ReportAsync(RendererEventType.PlaybackStalled, RendererErrorCodes.RtspPlaybackStalled,
                 "映像の進行が停止したため、自動再接続を開始します。", health.ToDiagnosticString(), BuildMetrics(null));
-            return await ReconnectCoreAsync(cancellationToken);
+            return await ReconnectCoreAsync(true, cancellationToken);
         }
         finally
         {
@@ -210,6 +245,8 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
             _operationLock.Release();
         }
     }
+
+    public bool HasPlaybackError => !string.IsNullOrWhiteSpace(_lastMediaError);
 
     public async ValueTask DisposeAsync()
     {
@@ -234,12 +271,7 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
         {
             try
             {
-                var polledTime = player.Time;
-                var previous = Interlocked.Exchange(ref _lastMediaTimeMs, polledTime);
-                if (polledTime >= 0 && (previous < 0 || polledTime != previous))
-                {
-                    Interlocked.Exchange(ref _lastProgressAtTicks, DateTimeOffset.UtcNow.Ticks);
-                }
+                ObserveMediaTime(player.Time);
             }
             catch (ObjectDisposedException)
             {
@@ -247,15 +279,16 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
             }
         }
 
-        var lastTicks = Interlocked.Read(ref _lastProgressAtTicks);
-        DateTimeOffset? lastProgressAt = lastTicks > 0 ? new DateTimeOffset(lastTicks, TimeSpan.Zero) : null;
-        var age = lastProgressAt is null ? TimeSpan.MaxValue : DateTimeOffset.UtcNow - lastProgressAt.Value;
+        var progress = _progressTracker.Snapshot(DateTimeOffset.UtcNow);
         return new PlaybackHealthSnapshot(
             player?.State == VLCState.Playing,
             unchecked((int)(player?.VoutCount ?? 0u)),
-            Interlocked.Read(ref _lastMediaTimeMs),
-            lastProgressAt,
-            age);
+            progress.MediaTimeMs,
+            progress.LastProgressAt,
+            progress.ProgressAge,
+            progress.IsPrimed,
+            progress.StableSamples,
+            progress.Rate);
     }
 
     public RendererMetrics? GetMetricsForDiagnostics() => BuildMetrics(null);
@@ -263,7 +296,6 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
     private async Task<bool> WaitForVideoOutputAsync(CancellationToken cancellationToken)
     {
         var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(15);
-        var consecutive = 0;
         while (DateTimeOffset.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
         {
             if (_player is null)
@@ -271,17 +303,20 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
                 return false;
             }
 
-            if (_player.State == VLCState.Playing && _player.VoutCount > 0)
+            if (!string.IsNullOrWhiteSpace(_lastMediaError) && _player.State != VLCState.Playing)
             {
-                consecutive++;
-                if (consecutive >= 3)
-                {
-                    return true;
-                }
+                return false;
+            }
+
+            var health = GetPlaybackHealth();
+            if (health.IsPlaying && health.VoutCount > 0 && health.IsPrimed)
+            {
+                return true;
             }
             else
             {
-                consecutive = 0;
+                // VoutCount can become positive before decoded media time is
+                // stable. Do not attach the HWND during that transient state.
             }
 
             await Task.Delay(250, cancellationToken);
@@ -293,6 +328,19 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
     private async Task<bool> FailAsync(string errorCode, string userMessage, string details, CancellationToken cancellationToken)
     {
         await ReportAsync(RendererEventType.FatalError, errorCode, userMessage, details);
+        await StopPlayerAsync();
+        _window.ResetToHiddenTopLevel();
+        return false;
+    }
+
+    private async Task<bool> FailStartAsync(string errorCode, string userMessage, string details,
+        CancellationToken cancellationToken, bool suppressTransientFailure = false)
+    {
+        if (!suppressTransientFailure)
+        {
+            await ReportAsync(RendererEventType.FatalError, errorCode, userMessage, details);
+        }
+
         await StopPlayerAsync();
         _window.ResetToHiddenTopLevel();
         return false;
@@ -318,23 +366,56 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
         await Task.CompletedTask;
     }
 
-    private async Task<bool> ReconnectCoreAsync(CancellationToken cancellationToken)
+    private async Task<bool> ReconnectCoreAsync(bool retryUntilRecovered, CancellationToken cancellationToken)
     {
         if (_lastOptions is null)
         {
             return false;
         }
 
-        _reconnectCount++;
-        await ReportAsync(RendererEventType.Reconnecting, userMessage: "RTSPを再接続しています。");
-        return await StartCoreAsync(_lastOptions, recoverShell: false, cancellationToken);
+        var policy = new ReconnectPolicy();
+        var maxAttempts = retryUntilRecovered ? 6 : 1;
+        for (var attempt = 0; attempt < maxAttempts && !cancellationToken.IsCancellationRequested; attempt++)
+        {
+            _reconnectCount++;
+            await ReportAsync(RendererEventType.Reconnecting,
+                userMessage: attempt == 0
+                    ? "RTSPを再接続しています。"
+                    : $"RTSP配信元の復帰を待って再接続しています（{attempt + 1}/{maxAttempts}）。");
+            if (await StartCoreAsync(_lastOptions, recoverShell: false, cancellationToken, suppressTransientFailure: retryUntilRecovered))
+            {
+                return true;
+            }
+
+            if (attempt + 1 < maxAttempts)
+            {
+                var delay = policy.GetDelay(attempt, jitterFactor: 0.1, randomUnit: 0.5);
+                await Task.Delay(delay, cancellationToken);
+            }
+        }
+
+        if (retryUntilRecovered && !cancellationToken.IsCancellationRequested)
+        {
+            await ReportAsync(RendererEventType.FatalError, RendererErrorCodes.RtspOpenFailed,
+                "RTSP配信元が復帰しないため、壁紙を表示できません。", "自動再接続を6回実行しました。配信元とgo2rtcの状態を確認してください。");
+        }
+
+        return false;
     }
 
     private void OnEncounteredError(object? sender, EventArgs e)
     {
         _lastMediaError = "LibVLC EncounteredError";
-        _ = ReportAsync(RendererEventType.PlaybackError, RendererErrorCodes.RtspOpenFailed,
-            "LibVLCがRTSP再生エラーを通知しました。", _lastMediaError);
+        if (IsAttached)
+        {
+            // An RTSP camera can briefly report an input error while its
+            // transport is being re-established. Do not publish PlaybackError
+            // here because the UI treats that event as terminal; the watchdog
+            // will perform the bounded automatic reconnect instead.
+            _ = ReportAsync(RendererEventType.Buffering,
+                userMessage: "RTSP入力が一時停止しました。自動復旧を開始します。",
+                technicalDetails: _lastMediaError);
+        }
     }
 
     private void OnBuffering(object? sender, MediaPlayerBufferingEventArgs e) =>
@@ -342,10 +423,26 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
 
     private void OnTimeChanged(object? sender, MediaPlayerTimeChangedEventArgs e)
     {
-        var previous = Interlocked.Exchange(ref _lastMediaTimeMs, e.Time);
-        if (previous != e.Time || previous < 0)
+        ObserveMediaTime(e.Time);
+    }
+
+    private void ObserveMediaTime(long mediaTimeMs)
+    {
+        var accepted = _progressTracker.Observe(mediaTimeMs, DateTimeOffset.UtcNow);
+        lock (_progressTraceLock)
         {
-            Interlocked.Exchange(ref _lastProgressAtTicks, DateTimeOffset.UtcNow.Ticks);
+            if (_progressTrace.Count < 40)
+            {
+                _progressTrace.Add($"{mediaTimeMs}ms/{(accepted ? "ok" : "hold")}");
+            }
+        }
+    }
+
+    private string GetProgressTrace()
+    {
+        lock (_progressTraceLock)
+        {
+            return string.Join(",", _progressTrace);
         }
     }
 
