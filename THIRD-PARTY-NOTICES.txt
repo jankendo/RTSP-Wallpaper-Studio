@@ -3,7 +3,7 @@ RTSP Wallpaper Studio - Third-party notices
 This project uses the following packages. Exact versions are pinned in
 Directory.Packages.props.
 
-LibVLCSharp.WPF 3.10.0
+LibVLCSharp 3.10.0
   License: LGPL-2.1-or-later
   Source: https://github.com/videolan/libvlcsharp
 

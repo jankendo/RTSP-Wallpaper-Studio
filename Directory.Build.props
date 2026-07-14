@@ -9,7 +9,7 @@
     <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <NoWarn>$(NoWarn);CS1591;CA1512;CA1822;CA1707;CA1848;CA1873;CA1826;CA1001;NETSDK1137</NoWarn>
+    <NoWarn>$(NoWarn);CS1591;CA1512;CA1822;CA1707;CA1848;CA1873;CA1826;CA1001;CA1838;NETSDK1137</NoWarn>
     <DebugType>portable</DebugType>
     <Platforms>x64</Platforms>
   </PropertyGroup>

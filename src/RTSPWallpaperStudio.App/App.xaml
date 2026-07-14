@@ -1,12 +1,26 @@
 <Application x:Class="RTSPWallpaperStudio.App.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             ShutdownMode="OnExplicitShutdown">
     <Application.Resources>
         <SolidColorBrush x:Key="WindowBackground" Color="#F5F7FB" />
         <SolidColorBrush x:Key="CardBackground" Color="#FFFFFF" />
         <SolidColorBrush x:Key="Ink" Color="#1D2433" />
         <SolidColorBrush x:Key="MutedInk" Color="#657087" />
         <SolidColorBrush x:Key="Accent" Color="#2764D8" />
+        <SolidColorBrush x:Key="SidebarBackground" Color="#22304A" />
+        <SolidColorBrush x:Key="SidebarForeground" Color="#F2F6FF" />
+        <SolidColorBrush x:Key="SidebarMutedForeground" Color="#B4C3D8" />
+        <SolidColorBrush x:Key="NavigationHoverBackground" Color="#2E4263" />
+        <SolidColorBrush x:Key="NavigationSelectedBackground" Color="#3C65A3" />
+        <SolidColorBrush x:Key="NavigationSelectedForeground" Color="#FFFFFF" />
+        <SolidColorBrush x:Key="NavigationFocusBorder" Color="#F6C453" />
+        <SolidColorBrush x:Key="ButtonBackground" Color="#E8EDF5" />
+        <SolidColorBrush x:Key="ButtonForeground" Color="#172235" />
+        <SolidColorBrush x:Key="ButtonBorder" Color="#B8C5D8" />
+        <SolidColorBrush x:Key="DangerBackground" Color="#B83E51" />
+        <SolidColorBrush x:Key="DangerForeground" Color="#FFFFFF" />
+        <SolidColorBrush x:Key="FocusBorder" Color="#F6C453" />
         <Style TargetType="TextBlock">
             <Setter Property="Foreground" Value="{StaticResource Ink}" />
         </Style>

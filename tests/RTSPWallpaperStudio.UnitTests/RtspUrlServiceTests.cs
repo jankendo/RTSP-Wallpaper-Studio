@@ -35,4 +35,12 @@ public sealed class RtspUrlServiceTests
         Assert.DoesNotContain("secret", sanitized);
         Assert.DoesNotContain("token=abc", sanitized);
     }
+
+    [Fact]
+    public void SanitizeForLog_DoesNotCreateMalformedUriWithoutCredentials()
+    {
+        var sanitized = RtspUrlService.SanitizeForLog("rtsp://127.0.0.1:8554/live");
+
+        Assert.Equal("rtsp://127.0.0.1:8554/live", sanitized);
+    }
 }

@@ -81,6 +81,7 @@ public sealed class AppSettings
     public bool StartWithWindows { get; set; }
     public bool StartMinimized { get; set; } = true;
     public int StartupDelaySeconds { get; set; } = 3;
+    public string ThemeMode { get; set; } = "Light";
 }
 
 public readonly record struct RectD(double X, double Y, double Width, double Height)
@@ -132,6 +133,21 @@ public sealed class MonitorAssignment
 
 public sealed record IpcEnvelope(string Command, string? Payload = null, string? RequestId = null);
 
+public enum IpcMessageKind
+{
+    Command,
+    Event,
+    Heartbeat
+}
+
+public sealed record IpcMessage(
+    IpcMessageKind Kind,
+    string Name,
+    string? Payload = null,
+    string? RequestId = null,
+    string? RendererId = null,
+    int SchemaVersion = 1);
+
 public sealed record RendererStartOptions(
     string Url,
     string? UserName,
@@ -140,7 +156,9 @@ public sealed record RendererStartOptions(
     int NetworkCachingMs,
     DisplayMode DisplayMode,
     string MonitorId,
-    int ParentProcessId);
+    int ParentProcessId,
+    HardwareDecodeMode HardwareDecode = HardwareDecodeMode.Automatic,
+    bool MuteAudio = true);
 
 public sealed record RendererStatusMessage(
     PlaybackStatus Status,
@@ -149,3 +167,94 @@ public sealed record RendererStatusMessage(
     int? VideoWidth = null,
     int? VideoHeight = null,
     string? Codec = null);
+
+public enum DesktopLayoutStrategy
+{
+    Unknown,
+    LegacyWorkerW,
+    RaisedDesktop
+}
+
+public enum RendererEventType
+{
+    RendererReady,
+    LibVlcInitialized,
+    StreamOpening,
+    MediaParsed,
+    VideoTrackDetected,
+    VideoOutputReady,
+    DesktopHostDiscovered,
+    AttachmentSucceeded,
+    AttachmentFailed,
+    WallpaperVisible,
+    PlaybackRunning,
+    Buffering,
+    Reconnecting,
+    PlaybackError,
+    ExplorerRestartDetected,
+    Reattached,
+    Stopped,
+    FatalError,
+    Heartbeat
+}
+
+public static class RendererErrorCodes
+{
+    public const string VlcInitFailed = "VLC_INIT_FAILED";
+    public const string VlcNativeMissing = "VLC_NATIVE_MISSING";
+    public const string VlcPluginPathInvalid = "VLC_PLUGIN_PATH_INVALID";
+    public const string VlcArchitectureMismatch = "VLC_ARCHITECTURE_MISMATCH";
+    public const string RtspOpenFailed = "RTSP_OPEN_FAILED";
+    public const string RtspPortClosed = "RTSP_PORT_CLOSED";
+    public const string RtspUnauthorized = "RTSP_UNAUTHORIZED";
+    public const string RtspNoVideoTrack = "RTSP_NO_VIDEO_TRACK";
+    public const string RtspFirstFrameTimeout = "RTSP_FIRST_FRAME_TIMEOUT";
+    public const string DesktopProgmanNotFound = "DESKTOP_PROGMAN_NOT_FOUND";
+    public const string DesktopShellViewNotFound = "DESKTOP_SHELL_VIEW_NOT_FOUND";
+    public const string DesktopHostNotFound = "DESKTOP_HOST_NOT_FOUND";
+    public const string DesktopUnsupportedLayout = "DESKTOP_UNSUPPORTED_LAYOUT";
+    public const string WallpaperSetParentFailed = "WALLPAPER_SET_PARENT_FAILED";
+    public const string WallpaperParentMismatch = "WALLPAPER_PARENT_MISMATCH";
+    public const string WallpaperStyleUpdateFailed = "WALLPAPER_STYLE_UPDATE_FAILED";
+    public const string WallpaperCoordinateMappingFailed = "WALLPAPER_COORDINATE_MAPPING_FAILED";
+    public const string WallpaperRectValidationFailed = "WALLPAPER_RECT_VALIDATION_FAILED";
+    public const string WallpaperZOrderValidationFailed = "WALLPAPER_ZORDER_VALIDATION_FAILED";
+    public const string ExplorerReattachFailed = "EXPLORER_REATTACH_FAILED";
+    public const string RendererCrashLoop = "RENDERER_CRASH_LOOP";
+}
+
+public sealed record RendererMetrics(
+    int? ProcessId,
+    nint RendererHwnd,
+    nint ParentHwnd,
+    nint ExpectedParentHwnd,
+    int VoutCount,
+    string MediaState,
+    string? Codec,
+    int? VideoWidth,
+    int? VideoHeight,
+    int ReconnectCount,
+    DesktopLayoutStrategy DesktopStrategy,
+    RectD RendererRect,
+    RectD MonitorRect);
+
+public sealed record RendererEvent(
+    string RendererId,
+    RendererEventType Type,
+    DateTimeOffset Timestamp,
+    string? ErrorCode = null,
+    string? UserMessage = null,
+    string? TechnicalDetails = null,
+    RendererMetrics? Metrics = null);
+
+public sealed class RuntimeState
+{
+    public int SchemaVersion { get; set; } = 1;
+    public bool PreviousShutdownClean { get; set; } = true;
+    public bool WallpaperApplyInProgress { get; set; }
+    public string? LastSuccessfulProfileId { get; set; }
+    public string? LastSuccessfulMonitorId { get; set; }
+    public int? LastRendererPid { get; set; }
+    public string? LastFailureCode { get; set; }
+    public DateTimeOffset? LastFailureAt { get; set; }
+}

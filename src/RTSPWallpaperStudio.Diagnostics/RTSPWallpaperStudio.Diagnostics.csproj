@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>RTSPWallpaperStudio.Diagnostics</RootNamespace>
+    <AssemblyName>RTSPWallpaperStudio.Diagnostics</AssemblyName>
+    <InvariantGlobalization>false</InvariantGlobalization>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\RTSPWallpaperStudio.Core\RTSPWallpaperStudio.Core.csproj" />
+    <ProjectReference Include="..\RTSPWallpaperStudio.Infrastructure\RTSPWallpaperStudio.Infrastructure.csproj" />
+    <ProjectReference Include="..\RTSPWallpaperStudio.Interop\RTSPWallpaperStudio.Interop.csproj" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" />
+  </ItemGroup>
+</Project>

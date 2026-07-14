@@ -20,4 +20,5 @@ public sealed class AppPathService
     public string Screenshots { get; }
     public string SettingsFile => Path.Combine(Root, "settings.json");
     public string BackupFile => Path.Combine(Root, "settings.json.bak");
+    public string RuntimeStateFile => Path.Combine(Root, "runtime-state.json");
 }
