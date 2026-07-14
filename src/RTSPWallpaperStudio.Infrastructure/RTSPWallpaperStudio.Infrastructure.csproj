@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>RTSPWallpaperStudio.Infrastructure</RootNamespace>
+    <AssemblyName>RTSPWallpaperStudio.Infrastructure</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\RTSPWallpaperStudio.Core\RTSPWallpaperStudio.Core.csproj" />
+    <ProjectReference Include="..\RTSPWallpaperStudio.Interop\RTSPWallpaperStudio.Interop.csproj" />
+    <PackageReference Include="Microsoft.Extensions.Logging" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" />
+  </ItemGroup>
+</Project>

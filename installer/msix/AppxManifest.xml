@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+         xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+         IgnorableNamespaces="uap">
+  <Identity Name="Jankendo.RTSPWallpaperStudio" Publisher="CN=Jankendo" Version="0.1.0.0" />
+  <Properties>
+    <DisplayName>RTSP Wallpaper Studio</DisplayName>
+    <PublisherDisplayName>jankendo</PublisherDisplayName>
+    <Description>RTSP映像をWindowsライブ壁紙として表示します。</Description>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26200.0" />
+  </Dependencies>
+  <Applications>
+    <Application Id="App" Executable="RTSPWallpaperStudio.App.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements AppListEntry="none" DisplayName="RTSP Wallpaper Studio" Description="RTSPライブ壁紙" BackgroundColor="#2764D8" Square150x150Logo="Assets\Square150x150Logo.png" Square44x44Logo="Assets\Square44x44Logo.png" />
+    </Application>
+  </Applications>
+</Package>

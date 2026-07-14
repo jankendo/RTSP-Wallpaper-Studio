@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>RTSPWallpaperStudio.Interop</RootNamespace>
+    <AssemblyName>RTSPWallpaperStudio.Interop</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\RTSPWallpaperStudio.Core\RTSPWallpaperStudio.Core.csproj" />
+  </ItemGroup>
+</Project>

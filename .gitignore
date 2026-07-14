@@ -1,0 +1,30 @@
+## .NET build output
+**/bin/
+**/obj/
+.vs/
+.idea/
+*.user
+*.suo
+
+## Local packages and artifacts
+packages/
+artifacts/
+publish/
+test-results/
+*.msix
+*.appinstaller
+*.pfx
+
+## Local app state and secrets
+settings.json
+profiles.json
+state.json
+*.log
+*.dmp
+.env
+.env.*
+
+## OS files
+Thumbs.db
+Desktop.ini
+

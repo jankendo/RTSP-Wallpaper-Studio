@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>RTSPWallpaperStudio.Core</RootNamespace>
+    <AssemblyName>RTSPWallpaperStudio.Core</AssemblyName>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,7 @@
+# WorkerW配置設計
+
+Windowsには動画壁紙向けの保証された公開APIがありません。本実装はProgmanへShell変更メッセージを送り、`SHELLDLL_DefView`を持つトップレベルウィンドウの背後にあるWorkerWを探索します。
+
+Rendererのウィンドウは、`WS_CHILD`、`WS_VISIBLE`、`WS_CLIPCHILDREN`、`WS_CLIPSIBLINGS`、`WS_EX_TOOLWINDOW`、`WS_EX_NOACTIVATE`を設定してWorkerWへ親子付けします。失敗時は通常ウィンドウとして表示せず、Renderer内の診断メッセージを表示して処理を停止します。
+
+Explorerの再起動・テーマ変更・仮想デスクトップ切替などでWorkerWのハンドルが変わる可能性があります。現状はRendererの軽量ヘルスチェックで再探索します。`TaskbarCreated`、`WM_DISPLAYCHANGE`、セッション/電源イベントを組み合わせた製品版の復旧は今後のQA対象です。

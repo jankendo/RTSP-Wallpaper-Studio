@@ -1,0 +1,35 @@
+[CmdletBinding()]
+param(
+    [string]$Configuration = "Release",
+    [string]$OutputRoot = ""
+)
+
+$ErrorActionPreference = "Stop"
+$root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
+    $OutputRoot = Join-Path $root "artifacts\portable"
+}
+
+$appProject = Join-Path $root "src\RTSPWallpaperStudio.App\RTSPWallpaperStudio.App.csproj"
+$rendererProject = Join-Path $root "src\RTSPWallpaperStudio.Renderer\RTSPWallpaperStudio.Renderer.csproj"
+$appPublish = Join-Path $OutputRoot "app"
+$rendererPublish = Join-Path $OutputRoot "renderer"
+$zipPath = Join-Path $OutputRoot "RTSPWallpaperStudio-win-x64.zip"
+
+if (Test-Path -LiteralPath $OutputRoot) { Remove-Item -LiteralPath $OutputRoot -Recurse -Force }
+New-Item -ItemType Directory -Path $appPublish, $rendererPublish | Out-Null
+
+dotnet publish $appProject -c $Configuration -r win-x64 --self-contained true -p:Platform=x64 -p:PublishSingleFile=false -o $appPublish
+dotnet publish $rendererProject -c $Configuration -r win-x64 --self-contained true -p:Platform=x64 -p:PublishSingleFile=false -o $rendererPublish
+
+Get-ChildItem -LiteralPath $rendererPublish -File | Copy-Item -Destination $appPublish -Force
+Get-ChildItem -LiteralPath $rendererPublish -Directory | ForEach-Object {
+    Copy-Item -LiteralPath $_.FullName -Destination $appPublish -Recurse -Force
+}
+Copy-Item -LiteralPath (Join-Path $root "README.md") -Destination $appPublish -Force
+Copy-Item -LiteralPath (Join-Path $root "THIRD-PARTY-NOTICES.txt") -Destination $appPublish -Force
+
+if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
+Compress-Archive -Path (Join-Path $appPublish "*") -DestinationPath $zipPath -CompressionLevel Optimal
+Get-FileHash -Algorithm SHA256 $zipPath | ForEach-Object { "$($_.Hash)  $($_.Path | Split-Path -Leaf)" } | Set-Content -Path (Join-Path $OutputRoot "SHA256SUMS.txt") -Encoding utf8
+Write-Host "Portable package: $zipPath"

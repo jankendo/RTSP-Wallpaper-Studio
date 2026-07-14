@@ -1,0 +1,8 @@
+LibVLC and LibVLCSharp are distributed under the GNU Lesser General Public License version 2.1 or later.
+
+The authoritative license text is available at:
+https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
+
+The repository keeps LibVLC as a separately replaceable native dependency in
+the Portable distribution. Consult the upstream project for the complete
+source and notice requirements.

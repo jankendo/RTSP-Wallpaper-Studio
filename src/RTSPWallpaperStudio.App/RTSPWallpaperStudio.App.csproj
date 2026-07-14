@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <UseWPF>true</UseWPF>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <RootNamespace>RTSPWallpaperStudio.App</RootNamespace>
+    <AssemblyName>RTSPWallpaperStudio.App</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\RTSPWallpaperStudio.Core\RTSPWallpaperStudio.Core.csproj" />
+    <ProjectReference Include="..\RTSPWallpaperStudio.Infrastructure\RTSPWallpaperStudio.Infrastructure.csproj" />
+    <ProjectReference Include="..\RTSPWallpaperStudio.Interop\RTSPWallpaperStudio.Interop.csproj" />
+    <PackageReference Include="CommunityToolkit.Mvvm" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Update="app.manifest">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+</Project>
