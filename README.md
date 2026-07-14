@@ -15,6 +15,7 @@ RTSP映像を、Windowsデスクトップアイコンの背面にあるWorkerW�
 - Job Object、親PID監視、runtime-state.json、Ctrl + Alt + Shift + F12緊急停止
 - モニター列挙、永続ID生成、Fill / Fit / Stretch / Center / 1:1のレイアウト計算
 - Rendererと同じLibVLC経路を使うRTSP接続テスト（Playing + VoutCount > 0のFirst Frame Gate）
+- 再生後の映像進行監視（8秒停止で `RTSP_PLAYBACK_STALLED` を記録し、MediaPlayerを安全に再生成）
 - TCP / UDP / 自動方式、ネットワークキャッシュ、ハードウェアデコード設定の共通化
 - 起動時の `C:\go2rtc\go2rtc.exe` 自動起動、8554待受確認、アプリ所有プロセスの安全な終了
 - 接続テストの段階表示、キャンセル、具体的なエラーコード、認証情報の優先順位表示
@@ -59,9 +60,10 @@ dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.D
 dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.Diagnostics.csproj -c Release -p:Platform=x64 -- --url rtsp://127.0.0.1:8554/test --transport tcp --timeout 10 --wallpaper
 dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.Diagnostics.csproj -c Release -p:Platform=x64 -- --start-go2rtc --url rtsp://127.0.0.1:8554/switchbot3mp --transport tcp --timeout 15 --wallpaper
 dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.Diagnostics.csproj -c Release -p:Platform=x64 -- --ipc-smoke
+dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.Diagnostics.csproj -c Release -p:Platform=x64 -- --url rtsp://127.0.0.1:8555/test --transport tcp --wallpaper --hold-seconds 30
 ```
 
-`--wallpaper` を付けると、接続テスト成功後にRendererを起動し、`WallpaperVisible`イベントを受信してから停止します。`--start-go2rtc` は `C:\go2rtc\go2rtc.exe` を診断プロセスの所有下で起動し、検証終了時にそれだけを停止します。`--ipc-smoke` はRTSP接続を省略してRendererのNamed Pipe接続、Ready/Heartbeat/停止イベントだけを検証します。GUIを使わないため、CI・障害再現・ログ採取に利用できます。
+`--wallpaper` を付けると、接続テスト成功後にRendererを起動し、`WallpaperVisible`イベントを受信してから停止します。`--hold-seconds` を併用すると指定秒数だけ表示を維持し、長時間再生・フリーズ監視を検証できます。`--start-go2rtc` は `C:\go2rtc\go2rtc.exe` を診断プロセスの所有下で起動し、検証終了時にそれだけを停止します。`--ipc-smoke` はRTSP接続を省略してRendererのNamed Pipe接続、Ready/Heartbeat/停止イベントだけを検証します。GUIを使わないため、CI・障害再現・ログ採取に利用できます。
 
 アプリは閉じるボタンまたは最小化で終了せず、通知領域へ格納されます。トレイの「表示」で画面を戻し、「緊急停止」でRendererを停止し、「終了」で完全終了します。設定画面の「Windows起動時に起動」を有効にして保存すると、現在ユーザーのHKCU Runへアプリ本体を登録します。「起動時は画面を表示しない」を有効にすると、ログオン時はトレイだけで起動します。
 

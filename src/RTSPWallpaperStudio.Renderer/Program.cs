@@ -94,6 +94,7 @@ internal static class Program
     private static async Task WatchdogAsync(int parentPid, string rendererId, RendererStreamPlayer player, NativeRendererWindow window,
         DesktopHostController desktopHost, RendererIpcClient ipc, CancellationToken cancellationToken)
     {
+        var stallThreshold = TimeSpan.FromSeconds(8);
         while (!cancellationToken.IsCancellationRequested)
         {
             await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
@@ -104,10 +105,25 @@ internal static class Program
                 return;
             }
 
-            await ipc.SendEventAsync(new RendererEvent(rendererId, RendererEventType.Heartbeat, DateTimeOffset.UtcNow), cancellationToken);
+            var heartbeatMetrics = player.IsRunning && player.IsAttached
+                ? player.GetMetricsForDiagnostics()
+                : null;
+            await ipc.SendEventAsync(new RendererEvent(rendererId, RendererEventType.Heartbeat, DateTimeOffset.UtcNow,
+                Metrics: heartbeatMetrics), cancellationToken);
             if (player.IsRunning && player.IsAttached && !desktopHost.ValidateAttachment(window.Hwnd, out _))
             {
                 await player.ReattachAfterShellRestartAsync(cancellationToken);
+                continue;
+            }
+
+            if (player.IsRunning && player.IsAttached)
+            {
+                var health = player.GetPlaybackHealth();
+                if (PlaybackStallDetector.IsStalled(health.IsPlaying, health.VoutCount, health.LastProgressAt,
+                    DateTimeOffset.UtcNow, stallThreshold))
+                {
+                    await player.RecoverFromStallAsync(stallThreshold, cancellationToken);
+                }
             }
         }
     }

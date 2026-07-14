@@ -15,8 +15,12 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
     private MediaPlayer? _player;
     private Media? _media;
     private RendererStartOptions? _lastOptions;
+    private DesktopHostDiscoveryResult? _lastDiscovery;
     private string? _lastMediaError;
     private int _reconnectCount;
+    private long _lastMediaTimeMs = -1;
+    private long _lastProgressAtTicks;
+    private readonly SemaphoreSlim _operationLock = new(1, 1);
 
     public RendererStreamPlayer(NativeRendererWindow window, DesktopHostController desktopHost, Func<RendererEvent, Task> report)
     {
@@ -29,6 +33,19 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
     public bool IsAttached { get; private set; }
 
     public async Task<bool> StartAsync(RendererStartOptions options, bool recoverShell = false, CancellationToken cancellationToken = default)
+    {
+        await _operationLock.WaitAsync(cancellationToken);
+        try
+        {
+            return await StartCoreAsync(options, recoverShell, cancellationToken);
+        }
+        finally
+        {
+            _operationLock.Release();
+        }
+    }
+
+    private async Task<bool> StartCoreAsync(RendererStartOptions options, bool recoverShell, CancellationToken cancellationToken)
     {
         _lastOptions = options;
         _window.Hide();
@@ -53,6 +70,9 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
             };
             _player.EncounteredError += OnEncounteredError;
             _player.Buffering += OnBuffering;
+            _player.TimeChanged += OnTimeChanged;
+            Interlocked.Exchange(ref _lastMediaTimeMs, -1);
+            Interlocked.Exchange(ref _lastProgressAtTicks, DateTimeOffset.UtcNow.Ticks);
 
             await ReportAsync(RendererEventType.StreamOpening);
             var playbackOptions = new RtspPlaybackOptions(options.Url, options.UserName, options.Password,
@@ -94,6 +114,7 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
 
             await ReportAsync(RendererEventType.DesktopHostDiscovered, userMessage: attach.Discovery?.Diagnostic,
                 technicalDetails: attach.Discovery?.Diagnostic);
+            _lastDiscovery = attach.Discovery;
             await ReportAsync(RendererEventType.AttachmentSucceeded, metrics: BuildMetrics(attach.Discovery));
             if (!_desktopHost.ValidateAttachment(_window.Hwnd, out var validationDiagnostic))
             {
@@ -116,47 +137,128 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
 
     public async Task<bool> ReconnectAsync(CancellationToken cancellationToken = default)
     {
-        if (_lastOptions is null)
+        await _operationLock.WaitAsync(cancellationToken);
+        try
         {
-            return false;
+            return await ReconnectCoreAsync(cancellationToken);
         }
-
-        _reconnectCount++;
-        await ReportAsync(RendererEventType.Reconnecting, userMessage: "RTSPを再接続しています。");
-        return await StartAsync(_lastOptions, recoverShell: false, cancellationToken);
+        finally
+        {
+            _operationLock.Release();
+        }
     }
 
     public async Task<bool> ReattachAfterShellRestartAsync(CancellationToken cancellationToken = default)
     {
-        if (_lastOptions is null)
+        await _operationLock.WaitAsync(cancellationToken);
+        try
         {
-            return false;
-        }
+            if (_lastOptions is null)
+            {
+                return false;
+            }
 
-        await ReportAsync(RendererEventType.ExplorerRestartDetected, userMessage: "Explorerの変更を検出しました。壁紙を安全に再配置します。");
-        _reconnectCount++;
-        var restored = await StartAsync(_lastOptions, recoverShell: true, cancellationToken);
-        if (restored)
+            await ReportAsync(RendererEventType.ExplorerRestartDetected, userMessage: "Explorerの変更を検出しました。壁紙を安全に再配置します。");
+            _reconnectCount++;
+            var restored = await StartCoreAsync(_lastOptions, recoverShell: true, cancellationToken);
+            if (restored)
+            {
+                await ReportAsync(RendererEventType.Reattached, userMessage: "デスクトップホストへ再配置しました。");
+            }
+
+            return restored;
+        }
+        finally
         {
-            await ReportAsync(RendererEventType.Reattached, userMessage: "デスクトップホストへ再配置しました。");
+            _operationLock.Release();
         }
+    }
 
-        return restored;
+    public async Task<bool> RecoverFromStallAsync(TimeSpan threshold, CancellationToken cancellationToken = default)
+    {
+        await _operationLock.WaitAsync(cancellationToken);
+        try
+        {
+            var health = GetPlaybackHealth();
+            if (!PlaybackStallDetector.IsStalled(health.IsPlaying, health.VoutCount, health.LastProgressAt,
+                    DateTimeOffset.UtcNow, threshold) || _lastOptions is null)
+            {
+                return false;
+            }
+
+            await ReportAsync(RendererEventType.PlaybackStalled, RendererErrorCodes.RtspPlaybackStalled,
+                "映像の進行が停止したため、自動再接続を開始します。", health.ToDiagnosticString(), BuildMetrics(null));
+            return await ReconnectCoreAsync(cancellationToken);
+        }
+        finally
+        {
+            _operationLock.Release();
+        }
     }
 
     public async Task StopAsync()
     {
-        _window.Hide();
-        await StopPlayerAsync();
-        await ReportAsync(RendererEventType.Stopped, userMessage: "Rendererを停止しました。");
+        await _operationLock.WaitAsync();
+        try
+        {
+            _window.Hide();
+            await StopPlayerAsync();
+            await ReportAsync(RendererEventType.Stopped, userMessage: "Rendererを停止しました。");
+        }
+        finally
+        {
+            _operationLock.Release();
+        }
     }
 
     public async ValueTask DisposeAsync()
     {
-        await StopPlayerAsync();
-        _libVlc?.Dispose();
-        _libVlc = null;
+        await _operationLock.WaitAsync();
+        try
+        {
+            await StopPlayerAsync();
+            _libVlc?.Dispose();
+            _libVlc = null;
+        }
+        finally
+        {
+            _operationLock.Release();
+            _operationLock.Dispose();
+        }
     }
+
+    public PlaybackHealthSnapshot GetPlaybackHealth()
+    {
+        var player = _player;
+        if (player is not null)
+        {
+            try
+            {
+                var polledTime = player.Time;
+                var previous = Interlocked.Exchange(ref _lastMediaTimeMs, polledTime);
+                if (polledTime >= 0 && (previous < 0 || polledTime != previous))
+                {
+                    Interlocked.Exchange(ref _lastProgressAtTicks, DateTimeOffset.UtcNow.Ticks);
+                }
+            }
+            catch (ObjectDisposedException)
+            {
+                // A stop/reconnect may dispose MediaPlayer while the watchdog is sampling it.
+            }
+        }
+
+        var lastTicks = Interlocked.Read(ref _lastProgressAtTicks);
+        DateTimeOffset? lastProgressAt = lastTicks > 0 ? new DateTimeOffset(lastTicks, TimeSpan.Zero) : null;
+        var age = lastProgressAt is null ? TimeSpan.MaxValue : DateTimeOffset.UtcNow - lastProgressAt.Value;
+        return new PlaybackHealthSnapshot(
+            player?.State == VLCState.Playing,
+            unchecked((int)(player?.VoutCount ?? 0u)),
+            Interlocked.Read(ref _lastMediaTimeMs),
+            lastProgressAt,
+            age);
+    }
+
+    public RendererMetrics? GetMetricsForDiagnostics() => BuildMetrics(null);
 
     private async Task<bool> WaitForVideoOutputAsync(CancellationToken cancellationToken)
     {
@@ -203,6 +305,7 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
         {
             _player.EncounteredError -= OnEncounteredError;
             _player.Buffering -= OnBuffering;
+            _player.TimeChanged -= OnTimeChanged;
             _player.Stop();
             _player.Dispose();
             _player = null;
@@ -215,6 +318,18 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
         await Task.CompletedTask;
     }
 
+    private async Task<bool> ReconnectCoreAsync(CancellationToken cancellationToken)
+    {
+        if (_lastOptions is null)
+        {
+            return false;
+        }
+
+        _reconnectCount++;
+        await ReportAsync(RendererEventType.Reconnecting, userMessage: "RTSPを再接続しています。");
+        return await StartCoreAsync(_lastOptions, recoverShell: false, cancellationToken);
+    }
+
     private void OnEncounteredError(object? sender, EventArgs e)
     {
         _lastMediaError = "LibVLC EncounteredError";
@@ -224,6 +339,15 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
 
     private void OnBuffering(object? sender, MediaPlayerBufferingEventArgs e) =>
         _ = ReportAsync(RendererEventType.Buffering, userMessage: "RTSP映像をバッファリングしています。");
+
+    private void OnTimeChanged(object? sender, MediaPlayerTimeChangedEventArgs e)
+    {
+        var previous = Interlocked.Exchange(ref _lastMediaTimeMs, e.Time);
+        if (previous != e.Time || previous < 0)
+        {
+            Interlocked.Exchange(ref _lastProgressAtTicks, DateTimeOffset.UtcNow.Ticks);
+        }
+    }
 
     private MonitorInfo FindMonitor(string monitorId)
     {
@@ -235,18 +359,21 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
 
     private RendererMetrics? BuildMetrics(DesktopHostDiscoveryResult? discovery)
     {
-        if (discovery is null)
+        var effectiveDiscovery = discovery ?? _lastDiscovery;
+        if (effectiveDiscovery is null)
         {
             return null;
         }
 
+        var health = GetPlaybackHealth();
         var parent = DesktopWindowDiagnostics.GetParent(_window.Hwnd);
         var rect = DesktopWindowDiagnostics.TryGetScreenRect(_window.Hwnd, out var screenRect)
             ? screenRect
             : new RectD();
-        return new RendererMetrics(Environment.ProcessId, _window.Hwnd, parent, discovery.HostHwnd,
+        return new RendererMetrics(Environment.ProcessId, _window.Hwnd, parent, effectiveDiscovery.HostHwnd,
             unchecked((int)(_player?.VoutCount ?? 0u)), _player?.State.ToString() ?? "Stopped", null, null, null,
-            _reconnectCount, discovery.Strategy, rect, rect);
+            _reconnectCount, effectiveDiscovery.Strategy, rect, rect, health.MediaTimeMs,
+            health.LastProgressAt, health.ProgressAge == TimeSpan.MaxValue ? null : health.ProgressAge.TotalSeconds);
     }
 
     private Task ReportAsync(RendererEventType type, string? errorCode = null, string? userMessage = null,

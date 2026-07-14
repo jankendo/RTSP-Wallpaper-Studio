@@ -51,7 +51,7 @@ public partial class MainViewModel : ObservableObject
     private string _currentPage = "home";
 
     [ObservableProperty]
-    private string _themeMode = "Light";
+    private string _themeMode = "Dark";
 
     [ObservableProperty]
     private bool _startWithWindows;
@@ -101,6 +101,9 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private string _relayStatus = "go2rtcを確認しています。";
 
+    [ObservableProperty]
+    private string _playbackHealth = "映像ヘルスを待機しています。";
+
     public MainViewModel(
         JsonSettingsStore settingsStore,
         ProtectedSecretStore secretStore,
@@ -145,10 +148,10 @@ public partial class MainViewModel : ObservableObject
     public ObservableCollection<MonitorInfo> Monitors { get; } = [];
     public IReadOnlyList<NavigationItemViewModel> NavigationItems { get; } =
     [
-        new("home", "ホーム", "⌂"),
-        new("profiles", "RTSPプロファイル", "◈"),
+        new("home", "ライブラリ", "⌂"),
+        new("profiles", "ストリーム", "◈"),
         new("display", "ディスプレイ", "▣"),
-        new("diagnostics", "診断と安全", "✓"),
+        new("diagnostics", "パフォーマンス", "◌"),
         new("settings", "設定", "⚙")
     ];
     public IAsyncRelayCommand ApplyCommand { get; }
@@ -217,7 +220,7 @@ public partial class MainViewModel : ObservableObject
 
             _runtimeState.PreviousShutdownClean = false;
             await _runtimeStateStore.SaveAsync(_runtimeState);
-            ThemeMode = string.IsNullOrWhiteSpace(_settings.ThemeMode) ? "Light" : _settings.ThemeMode;
+            ThemeMode = string.IsNullOrWhiteSpace(_settings.ThemeMode) ? "Dark" : _settings.ThemeMode;
             StartWithWindows = _settings.StartWithWindows;
             StartMinimized = _settings.StartMinimized;
             SynchronizeStartupRegistration();
@@ -541,10 +544,15 @@ public partial class MainViewModel : ObservableObject
 
     private void ApplyRendererEvent(RendererEvent rendererEvent)
     {
-        DiagnosticsText = $"{rendererEvent.Timestamp:HH:mm:ss}  {rendererEvent.Type}\n" +
-                          $"コード：{rendererEvent.ErrorCode ?? "なし"}\n" +
-                          $"内容：{rendererEvent.UserMessage ?? "-"}\n" +
-                          $"技術情報：{rendererEvent.TechnicalDetails ?? "-"}";
+        UpdatePlaybackHealth(rendererEvent);
+        if (rendererEvent.Type != RendererEventType.Heartbeat)
+        {
+            DiagnosticsText = $"{rendererEvent.Timestamp:HH:mm:ss}  {rendererEvent.Type}\n" +
+                              $"コード：{rendererEvent.ErrorCode ?? "なし"}\n" +
+                              $"内容：{rendererEvent.UserMessage ?? "-"}\n" +
+                              $"技術情報：{rendererEvent.TechnicalDetails ?? "-"}" +
+                              (rendererEvent.Metrics is null ? string.Empty : $"\n\n映像ヘルス：{PlaybackHealth}");
+        }
         switch (rendererEvent.Type)
         {
             case RendererEventType.RendererReady:
@@ -557,6 +565,15 @@ public partial class MainViewModel : ObservableObject
             case RendererEventType.Buffering:
                 if (SelectedProfile is not null) SelectedProfile.LastStatus = PlaybackStatus.Buffering;
                 StatusMessage = "映像をバッファリングしています。";
+                break;
+            case RendererEventType.PlaybackStalled:
+                if (SelectedProfile is not null) SelectedProfile.LastStatus = PlaybackStatus.Reconnecting;
+                StatusMessage = "映像の進行停止を検出しました。自動再接続しています。";
+                FooterMessage = "フリーズ監視がMediaPlayerを安全に再生成しています。壁紙は復旧完了まで表示しません。";
+                break;
+            case RendererEventType.Reconnecting:
+                if (SelectedProfile is not null) SelectedProfile.LastStatus = PlaybackStatus.Reconnecting;
+                StatusMessage = "RTSPストリームを再接続しています。";
                 break;
             case RendererEventType.WallpaperVisible:
                 if (SelectedProfile is not null)
@@ -589,6 +606,19 @@ public partial class MainViewModel : ObservableObject
         }
 
         OnPropertyChanged(nameof(CurrentProfileStatus));
+    }
+
+    private void UpdatePlaybackHealth(RendererEvent rendererEvent)
+    {
+        if (rendererEvent.Metrics is not { } metrics)
+        {
+            return;
+        }
+
+        var age = metrics.VideoProgressAgeSeconds is { } seconds
+            ? $"{seconds:0.0}秒前"
+            : "未取得";
+        PlaybackHealth = $"{metrics.MediaState}  ·  Vout {metrics.VoutCount}  ·  映像進行 {age}  ·  MediaTime {metrics.MediaTimeMs}ms  ·  再接続 {metrics.ReconnectCount}回";
     }
 
     private async Task MarkFailureAsync(string code, string message, string? technicalDetails)

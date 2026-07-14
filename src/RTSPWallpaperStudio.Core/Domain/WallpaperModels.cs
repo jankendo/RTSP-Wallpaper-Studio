@@ -81,7 +81,7 @@ public sealed class AppSettings
     public bool StartWithWindows { get; set; }
     public bool StartMinimized { get; set; } = true;
     public int StartupDelaySeconds { get; set; } = 3;
-    public string ThemeMode { get; set; } = "Light";
+    public string ThemeMode { get; set; } = "Dark";
 }
 
 public readonly record struct RectD(double X, double Y, double Width, double Height)
@@ -195,7 +195,8 @@ public enum RendererEventType
     Reattached,
     Stopped,
     FatalError,
-    Heartbeat
+    Heartbeat,
+    PlaybackStalled
 }
 
 public static class RendererErrorCodes
@@ -209,6 +210,7 @@ public static class RendererErrorCodes
     public const string RtspUnauthorized = "RTSP_UNAUTHORIZED";
     public const string RtspNoVideoTrack = "RTSP_NO_VIDEO_TRACK";
     public const string RtspFirstFrameTimeout = "RTSP_FIRST_FRAME_TIMEOUT";
+    public const string RtspPlaybackStalled = "RTSP_PLAYBACK_STALLED";
     public const string DesktopProgmanNotFound = "DESKTOP_PROGMAN_NOT_FOUND";
     public const string DesktopShellViewNotFound = "DESKTOP_SHELL_VIEW_NOT_FOUND";
     public const string DesktopHostNotFound = "DESKTOP_HOST_NOT_FOUND";
@@ -236,7 +238,10 @@ public sealed record RendererMetrics(
     int ReconnectCount,
     DesktopLayoutStrategy DesktopStrategy,
     RectD RendererRect,
-    RectD MonitorRect);
+    RectD MonitorRect,
+    long MediaTimeMs = -1,
+    DateTimeOffset? LastVideoProgressAt = null,
+    double? VideoProgressAgeSeconds = null);
 
 public sealed record RendererEvent(
     string RendererId,

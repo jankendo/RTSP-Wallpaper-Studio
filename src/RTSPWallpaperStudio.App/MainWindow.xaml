@@ -101,7 +101,7 @@
                 <StackPanel DockPanel.Dock="Top">
                     <TextBlock Text="RTSP" FontSize="30" FontWeight="Bold" Foreground="{DynamicResource SidebarForeground}" />
                     <TextBlock Text="Wallpaper Studio" FontSize="16" Foreground="{DynamicResource SidebarMutedForeground}" Margin="0,-3,0,28" />
-                    <TextBlock Text="操作メニュー" Foreground="{DynamicResource SidebarMutedForeground}" FontSize="12" Margin="4,0,0,8" />
+                    <TextBlock Text="壁紙ライブラリ" Foreground="{DynamicResource SidebarMutedForeground}" FontSize="12" Margin="4,0,0,8" />
                     <ListBox ItemsSource="{Binding NavigationItems}" SelectedItem="{Binding SelectedNavigationItem, Mode=TwoWay}"
                              ItemContainerStyle="{StaticResource NavigationItemContainer}" Background="Transparent" BorderThickness="0"
                              KeyboardNavigation.TabNavigation="Local" AutomationProperties.Name="メインナビゲーション" />
@@ -120,8 +120,8 @@
             <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
             <Grid Grid.Row="0" Margin="0,0,0,22">
                 <StackPanel>
-                    <TextBlock Text="RTSP Wallpaper Studio" FontSize="28" FontWeight="Bold" />
-                    <TextBlock Text="映像出力とデスクトップ配置を検証してから、安全にライブ壁紙として表示します。" Foreground="{DynamicResource MutedInk}" Margin="0,5,0,0" />
+                    <TextBlock Text="壁紙ライブラリ" FontSize="28" FontWeight="Bold" />
+                    <TextBlock Text="ストリームを選び、状態を確認してからデスクトップへ適用します。" Foreground="{DynamicResource MutedInk}" Margin="0,5,0,0" />
                 </StackPanel>
                 <Border HorizontalAlignment="Right" Background="{DynamicResource ButtonBackground}" CornerRadius="16" Padding="13,7"><TextBlock Text="{Binding CurrentProfileStatus}" Foreground="{DynamicResource ButtonForeground}" FontWeight="SemiBold" /></Border>
             </Grid>
@@ -131,38 +131,70 @@
                     <Border VerticalAlignment="Top">
                         <Border.Style><Style TargetType="Border" BasedOn="{StaticResource Card}"><Setter Property="Visibility" Value="Collapsed" /><Style.Triggers><DataTrigger Binding="{Binding CurrentPage}" Value="home"><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers></Style></Border.Style>
                         <StackPanel>
-                            <TextBlock Text="壁紙の状態" FontSize="22" FontWeight="SemiBold" />
-                            <TextBlock Text="{Binding StatusMessage}" FontSize="16" Margin="0,10,0,18" TextWrapping="Wrap" />
-                            <TextBlock Text="{Binding RelayStatus}" Foreground="{DynamicResource MutedInk}" TextWrapping="Wrap" Margin="0,0,0,12" />
+                            <Grid Margin="0,0,0,18">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="1.35*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Height="190" CornerRadius="14" Clip="M0,0 L520,0 L520,190 L0,190 Z" Margin="0,0,18,0">
+                                    <Border.Background>
+                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                            <GradientStop Color="#101A31" Offset="0" />
+                                            <GradientStop Color="#253E71" Offset="0.55" />
+                                            <GradientStop Color="#2A8C9C" Offset="1" />
+                                        </LinearGradientBrush>
+                                    </Border.Background>
+                                    <Grid>
+                                        <StackPanel Margin="22" VerticalAlignment="Bottom">
+                                            <TextBlock Text="LIVE WALLPAPER" Foreground="#9FE7F0" FontSize="11" FontWeight="Bold" />
+                                            <TextBlock Text="{Binding SelectedProfile.DisplayName, TargetNullValue=ストリーム未選択}" Foreground="White" FontSize="24" FontWeight="Bold" Margin="0,5,0,0" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Text="{Binding SelectedProfile.Url}" Foreground="#D5E9F4" FontSize="12" Margin="0,4,0,0" TextTrimming="CharacterEllipsis" />
+                                            <Border Background="#66000000" CornerRadius="10" Padding="10,5" HorizontalAlignment="Left" Margin="0,14,0,0"><TextBlock Text="{Binding CurrentProfileStatus}" Foreground="White" FontWeight="SemiBold" /></Border>
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+                                <Border Grid.Column="1" Background="{DynamicResource ButtonBackground}" CornerRadius="14" Padding="18">
+                                    <StackPanel>
+                                        <TextBlock Text="再生コントロール" FontSize="18" FontWeight="SemiBold" />
+                                        <TextBlock Text="{Binding StatusMessage}" Foreground="{DynamicResource MutedInk}" Margin="0,8,0,14" TextWrapping="Wrap" MaxHeight="62" />
+                                        <WrapPanel>
+                                            <Button Content="接続テスト" Command="{Binding TestConnectionCommand}" Style="{StaticResource SecondaryButton}" />
+                                            <Button Content="壁紙に適用" Command="{Binding ApplyCommand}" Style="{StaticResource PrimaryButton}" />
+                                            <Button Content="停止" Command="{Binding StopCommand}" Style="{StaticResource SecondaryButton}" />
+                                            <Button Content="キャンセル" Command="{Binding CancelConnectionTestCommand}" Style="{StaticResource QuietButton}" Visibility="{Binding IsConnectionTestRunning, Converter={StaticResource BoolToVisibility}}" />
+                                        </WrapPanel>
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
+                            <Grid Margin="0,0,0,18">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="1.4*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Background="{DynamicResource ButtonBackground}" CornerRadius="10" Padding="16" Margin="0,0,10,0">
+                                    <StackPanel><TextBlock Text="映像ヘルス" FontWeight="SemiBold" /><TextBlock Text="{Binding PlaybackHealth}" Foreground="{DynamicResource MutedInk}" Margin="0,6,0,0" TextWrapping="Wrap" /></StackPanel>
+                                </Border>
+                                <Border Grid.Column="1" Background="{DynamicResource ButtonBackground}" CornerRadius="10" Padding="16" Margin="10,0,0,0">
+                                    <StackPanel><TextBlock Text="中継サーバー" FontWeight="SemiBold" /><TextBlock Text="{Binding RelayStatus}" Foreground="{DynamicResource MutedInk}" Margin="0,6,0,0" TextWrapping="Wrap" /></StackPanel>
+                                </Border>
+                            </Grid>
                             <Border Background="{DynamicResource ButtonBackground}" CornerRadius="10" Padding="16" Margin="0,0,0,18">
                                 <StackPanel>
-                                    <TextBlock Text="接続テストの進行状況" FontWeight="SemiBold" />
+                                    <TextBlock Text="接続テスト" FontWeight="SemiBold" />
                                     <TextBlock Text="{Binding ConnectionTestStage}" Foreground="{DynamicResource MutedInk}" Margin="0,4,0,0" />
                                     <ProgressBar Value="{Binding ConnectionTestProgress}" Maximum="100" Height="8" Margin="0,9,0,6" />
                                     <ListBox ItemsSource="{Binding ConnectionTestSteps}" Height="72" BorderThickness="0" Background="Transparent" FontSize="12" />
                                     <TextBlock Text="{Binding ConnectionTestErrorCode}" Foreground="{DynamicResource DangerBackground}" TextWrapping="Wrap" />
                                 </StackPanel>
                             </Border>
-                            <Border Background="{DynamicResource ButtonBackground}" CornerRadius="10" Padding="16" Margin="0,0,0,18">
-                                <StackPanel><TextBlock Text="次に行うこと" FontWeight="SemiBold" /><TextBlock Text="1. プロファイルでRTSP URLを入力  2. 接続テスト  3. 壁紙に設定" Foreground="{DynamicResource MutedInk}" Margin="0,6,0,0" TextWrapping="Wrap" /></StackPanel>
+                            <Border Background="{DynamicResource ButtonBackground}" CornerRadius="10" Padding="16">
+                                <StackPanel><TextBlock Text="安全な適用フロー" FontWeight="SemiBold" /><TextBlock Text="ストリームを選択 → 接続テスト → 映像ヘルス確認 → 壁紙に適用" Foreground="{DynamicResource MutedInk}" Margin="0,6,0,0" TextWrapping="Wrap" /></StackPanel>
                             </Border>
-                            <StackPanel Orientation="Horizontal">
-                                <Button Content="接続テスト" Command="{Binding TestConnectionCommand}" Style="{StaticResource SecondaryButton}" />
-                                <Button Content="テスト成功後に壁紙へ設定" Command="{Binding ApplyCommand}" Style="{StaticResource PrimaryButton}" />
-                                <Button Content="壁紙を停止" Command="{Binding StopCommand}" Style="{StaticResource SecondaryButton}" />
-                                <Button Content="キャンセル" Command="{Binding CancelConnectionTestCommand}" Style="{StaticResource QuietButton}" Visibility="{Binding IsConnectionTestRunning, Converter={StaticResource BoolToVisibility}}" />
-                            </StackPanel>
                         </StackPanel>
                     </Border>
 
                     <Border VerticalAlignment="Top">
                         <Border.Style><Style TargetType="Border" BasedOn="{StaticResource Card}"><Setter Property="Visibility" Value="Collapsed" /><Style.Triggers><DataTrigger Binding="{Binding CurrentPage}" Value="profiles"><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers></Style></Border.Style>
                         <StackPanel>
-                            <TextBlock Text="RTSPプロファイル" FontSize="22" FontWeight="SemiBold" />
-                            <TextBlock Text="入力欄の認証情報を優先し、次にURL内認証情報、最後に保存済み保護パスワードを使います。パスワードはログへ出力しません。" Foreground="{DynamicResource MutedInk}" Margin="0,5,0,20" TextWrapping="Wrap" />
-                            <TextBlock Text="保存済みプロファイル" FontWeight="SemiBold" />
+                            <TextBlock Text="ストリームライブラリ" FontSize="22" FontWeight="SemiBold" />
+                            <TextBlock Text="ライブ壁紙ライブラリの操作感を参考に、接続先をカード形式で管理します。入力欄の認証情報を優先し、パスワードはログへ出力しません。" Foreground="{DynamicResource MutedInk}" Margin="0,5,0,20" TextWrapping="Wrap" />
+                            <TextBlock Text="保存済みストリーム" FontWeight="SemiBold" />
                             <ListBox ItemsSource="{Binding Profiles}" SelectedItem="{Binding SelectedProfile}" Margin="0,8,0,20" BorderThickness="0" Background="Transparent">
-                                <ListBox.ItemTemplate><DataTemplate><Border Padding="12" Margin="0,0,0,7" Background="{DynamicResource ButtonBackground}" CornerRadius="8"><StackPanel><TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" /><TextBlock Text="{Binding Url}" Foreground="{DynamicResource MutedInk}" TextTrimming="CharacterEllipsis" Margin="0,3,0,0" /></StackPanel></Border></DataTemplate></ListBox.ItemTemplate>
+                                <ListBox.ItemTemplate><DataTemplate><Border Padding="14" Margin="0,0,0,8" Background="{DynamicResource ButtonBackground}" CornerRadius="10"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="8" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions><Border Grid.Column="0" Background="{DynamicResource Accent}" CornerRadius="4" Margin="0,1,12,1" /><StackPanel Grid.Column="1"><TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" FontSize="15" /><TextBlock Text="{Binding Url}" Foreground="{DynamicResource MutedInk}" TextTrimming="CharacterEllipsis" Margin="0,4,0,0" /><TextBlock Text="選択すると右側の接続設定へ反映" Foreground="{DynamicResource MutedInk}" FontSize="11" Margin="0,6,0,0" /></StackPanel></Grid></Border></DataTemplate></ListBox.ItemTemplate>
                             </ListBox>
                             <TextBlock Text="RTSP URL" FontWeight="SemiBold" />
                             <TextBox Text="{Binding SelectedProfile.Url, UpdateSourceTrigger=PropertyChanged}" Padding="10" Margin="0,5,0,4" FontSize="15" />
@@ -189,7 +221,8 @@
                     <Border VerticalAlignment="Top">
                         <Border.Style><Style TargetType="Border" BasedOn="{StaticResource Card}"><Setter Property="Visibility" Value="Collapsed" /><Style.Triggers><DataTrigger Binding="{Binding CurrentPage}" Value="diagnostics"><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers></Style></Border.Style>
                         <StackPanel>
-                            <TextBlock Text="診断と安全" FontSize="22" FontWeight="SemiBold" /><TextBlock Text="Rendererは映像出力・親ウィンドウ・矩形・Z順を確認するまで表示しません。" Foreground="{DynamicResource MutedInk}" Margin="0,5,0,18" TextWrapping="Wrap" />
+                            <TextBlock Text="パフォーマンスと診断" FontSize="22" FontWeight="SemiBold" /><TextBlock Text="再生状態、映像進行、Renderer、デスクトップ配置を同じ画面で確認できます。フリーズは自動検出して再接続します。" Foreground="{DynamicResource MutedInk}" Margin="0,5,0,18" TextWrapping="Wrap" />
+                            <Border Background="{DynamicResource ButtonBackground}" CornerRadius="10" Padding="16" Margin="0,0,0,16"><StackPanel><TextBlock Text="現在の映像ヘルス" FontWeight="SemiBold" /><TextBlock Text="{Binding PlaybackHealth}" Foreground="{DynamicResource MutedInk}" Margin="0,6,0,0" TextWrapping="Wrap" /></StackPanel></Border>
                             <Border Background="{DynamicResource ButtonBackground}" CornerRadius="8" Padding="16"><TextBlock Text="{Binding DiagnosticsText}" FontFamily="Consolas" TextWrapping="Wrap" /></Border>
                             <TextBlock Text="{Binding ConnectionTestTechnicalDetails}" Foreground="{DynamicResource MutedInk}" TextWrapping="Wrap" Margin="0,16,0,0" />
                             <TextBlock Text="{Binding SafeModeMessage}" Foreground="#9A5E00" TextWrapping="Wrap" Margin="0,16,0,0" /><TextBlock Text="{Binding HotkeyWarning}" Foreground="{DynamicResource DangerBackground}" TextWrapping="Wrap" Margin="0,8,0,0" />

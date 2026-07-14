@@ -18,7 +18,7 @@ internal static class Program
         var options = Parse(args);
         if (options.ShowHelp)
         {
-            Console.WriteLine("Usage: RTSPWallpaperStudio.Diagnostics.exe --url <rtsp-url> [--transport tcp|udp|automatic] [--timeout 10] [--cache 300] [--start-go2rtc] [--wallpaper] [--ipc-smoke]");
+            Console.WriteLine("Usage: RTSPWallpaperStudio.Diagnostics.exe --url <rtsp-url> [--transport tcp|udp|automatic] [--timeout 10] [--cache 300] [--start-go2rtc] [--wallpaper] [--hold-seconds 30] [--ipc-smoke]");
             Console.WriteLine("       RTSPWallpaperStudio.Diagnostics.exe --startup-status");
             Console.WriteLine("       RTSPWallpaperStudio.Diagnostics.exe --startup-enable [--startup-exe <RTSPWallpaperStudio.App.exe>]");
             Console.WriteLine("       RTSPWallpaperStudio.Diagnostics.exe --startup-disable");
@@ -97,6 +97,12 @@ internal static class Program
             await rendererManager.StartAsync(startOptions).WaitAsync(TimeSpan.FromSeconds(15));
             var wallpaperSucceeded = await wallpaperResult.Task.WaitAsync(TimeSpan.FromSeconds(Math.Max(30, options.TimeoutSeconds + 20)));
             Console.WriteLine($"WALLPAPER_RESULT={(wallpaperSucceeded ? "SUCCESS" : "FAILED")}");
+            if (wallpaperSucceeded && options.HoldSeconds > 0)
+            {
+                Console.WriteLine($"WALLPAPER_HOLD_SECONDS={options.HoldSeconds}");
+                await Task.Delay(TimeSpan.FromSeconds(options.HoldSeconds));
+            }
+
             return wallpaperSucceeded ? 0 : 3;
         }
         catch (TimeoutException ex)
@@ -130,6 +136,7 @@ internal static class Program
         var startGo2Rtc = false;
         var wallpaper = false;
         var ipcSmoke = false;
+        var holdSeconds = 0;
         string? startupAction = null;
         string? startupExecutable = null;
         var help = false;
@@ -146,6 +153,7 @@ internal static class Program
                 case "--start-go2rtc": startGo2Rtc = true; break;
                 case "--wallpaper": wallpaper = true; break;
                 case "--ipc-smoke": ipcSmoke = true; break;
+                case "--hold-seconds": holdSeconds = Math.Clamp(int.Parse(args[++i], CultureInfo.InvariantCulture), 0, 3600); break;
                 case "--startup-status": startupAction = "status"; break;
                 case "--startup-enable": startupAction = "enable"; break;
                 case "--startup-disable": startupAction = "disable"; break;
@@ -157,7 +165,7 @@ internal static class Program
         }
 
         return new DiagnosticOptions(url, user, password, transport, timeout, cache, hardware, startGo2Rtc, wallpaper, ipcSmoke,
-            startupAction, startupExecutable, help);
+            holdSeconds, startupAction, startupExecutable, help);
     }
 
     private static int RunStartupCommand(DiagnosticOptions options)
@@ -223,5 +231,5 @@ internal static class Program
 
     private sealed record DiagnosticOptions(string Url, string? UserName, string? Password, TransportMode Transport,
         int TimeoutSeconds, int CacheMs, HardwareDecodeMode HardwareDecode, bool StartGo2Rtc, bool Wallpaper, bool IpcSmoke,
-        string? StartupAction, string? StartupExecutable, bool ShowHelp);
+        int HoldSeconds, string? StartupAction, string? StartupExecutable, bool ShowHelp);
 }
