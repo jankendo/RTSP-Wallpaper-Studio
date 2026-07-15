@@ -24,6 +24,7 @@ internal sealed class SoftwareVideoFrameBuffer : IDisposable
     private int _width;
     private int _height;
     private long _frameCount;
+    private ulong _lastFrameChecksum;
     private DateTimeOffset? _lastFrameAt;
     private string? _lastError;
     private bool _disposed;
@@ -80,19 +81,30 @@ internal sealed class SoftwareVideoFrameBuffer : IDisposable
 
     public bool HasFrame => FrameCount > 0;
 
+    public ulong LastFrameChecksum
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _lastFrameChecksum;
+            }
+        }
+    }
+
     public void Configure(MediaPlayer player)
     {
         player.SetVideoCallbacks(_lockCallback, _unlockCallback, _displayCallback);
         player.SetVideoFormatCallbacks(_formatCallback, _cleanupCallback);
     }
 
-    public void Paint(nint hdc, int destinationWidth, int destinationHeight)
+    public int Paint(nint hdc, int destinationWidth, int destinationHeight)
     {
         lock (_gate)
         {
             if (_latestFrame.Length == 0 || _width <= 0 || _height <= 0 || destinationWidth <= 0 || destinationHeight <= 0)
             {
-                return;
+                return 0;
             }
 
             var bitmapInfo = new RendererWin32.BitmapInfo
@@ -112,7 +124,7 @@ internal sealed class SoftwareVideoFrameBuffer : IDisposable
             var handle = GCHandle.Alloc(_latestFrame, GCHandleType.Pinned);
             try
             {
-                _ = RendererWin32.StretchDIBits(hdc, 0, 0, destinationWidth, destinationHeight,
+                return RendererWin32.StretchDIBits(hdc, 0, 0, destinationWidth, destinationHeight,
                     0, 0, _width, _height, handle.AddrOfPinnedObject(), ref bitmapInfo,
                     RendererWin32.DibRgbColors, RendererWin32.SrcCopy);
             }
@@ -194,6 +206,7 @@ internal sealed class SoftwareVideoFrameBuffer : IDisposable
 
                 _frameCount++;
                 _lastFrameAt = DateTimeOffset.UtcNow;
+                _lastFrameChecksum = ComputeChecksum(_latestFrame);
             }
 
             _frameDisplayed();
@@ -238,6 +251,7 @@ internal sealed class SoftwareVideoFrameBuffer : IDisposable
                 _height = requestedHeight;
                 _latestFrame = new byte[frameSize];
                 _frameCount = 0;
+                _lastFrameChecksum = 0;
                 _lastFrameAt = null;
                 for (var i = 0; i < BufferCount; i++)
                 {
@@ -281,6 +295,20 @@ internal sealed class SoftwareVideoFrameBuffer : IDisposable
         {
             _lastError = exception.GetType().Name + ": " + exception.Message;
         }
+    }
+
+    private static ulong ComputeChecksum(byte[] bytes)
+    {
+        const ulong offset = 14695981039346656037UL;
+        const ulong prime = 1099511628211UL;
+        var hash = offset;
+        for (var i = 0; i < bytes.Length; i += 97)
+        {
+            hash ^= bytes[i];
+            hash *= prime;
+        }
+
+        return hash;
     }
 
     private sealed class FrameBuffer(nint pointer)

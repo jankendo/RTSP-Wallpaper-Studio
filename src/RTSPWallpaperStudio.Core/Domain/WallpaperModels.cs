@@ -158,7 +158,8 @@ public sealed record RendererStartOptions(
     string MonitorId,
     int ParentProcessId,
     HardwareDecodeMode HardwareDecode = HardwareDecodeMode.Automatic,
-    bool MuteAudio = true);
+    bool MuteAudio = true,
+    bool RenderTestPattern = false);
 
 public sealed record RendererStatusMessage(
     PlaybackStatus Status,
@@ -196,7 +197,22 @@ public enum RendererEventType
     Stopped,
     FatalError,
     Heartbeat,
-    PlaybackStalled
+    PlaybackStalled,
+    WallpaperCommandInvoked,
+    RendererWindowCreated,
+    RendererSelfTestFrameRendered,
+    RendererAttached,
+    RendererBoundsValidated,
+    RendererWindowVisibleFlagConfirmed,
+    RendererPixelsDetectedOnOwnWindow,
+    RendererPixelsDetectedOnDesktop,
+    RendererAnimationDetectedOnDesktop,
+    DesktopIconsRemainVisible,
+    RtspDecodedFrameReceived,
+    RtspFrameCopiedToBackBuffer,
+    RtspFramePaintRequested,
+    RtspFramePresented,
+    WallpaperEndToEndVerified
 }
 
 public static class RendererErrorCodes
@@ -221,6 +237,8 @@ public static class RendererErrorCodes
     public const string WallpaperCoordinateMappingFailed = "WALLPAPER_COORDINATE_MAPPING_FAILED";
     public const string WallpaperRectValidationFailed = "WALLPAPER_RECT_VALIDATION_FAILED";
     public const string WallpaperZOrderValidationFailed = "WALLPAPER_ZORDER_VALIDATION_FAILED";
+    public const string WallpaperPresentationFailed = "WALLPAPER_PRESENTATION_FAILED";
+    public const string WallpaperEndToEndVerificationFailed = "WALLPAPER_END_TO_END_VERIFICATION_FAILED";
     public const string ExplorerReattachFailed = "EXPLORER_REATTACH_FAILED";
     public const string RendererCrashLoop = "RENDERER_CRASH_LOOP";
 }
@@ -247,7 +265,42 @@ public sealed record RendererMetrics(
     long WindowStyle = 0,
     long ExtendedWindowStyle = 0,
     long RootHwnd = 0,
-    long OwnerHwnd = 0);
+    long OwnerHwnd = 0,
+    RendererPresentationMetrics? Presentation = null);
+
+public sealed record RendererPresentationMetrics(
+    long DecodedFrameCount = 0,
+    long BackBufferCopyCount = 0,
+    long PaintRequestCount = 0,
+    long PaintCount = 0,
+    long PresentedFrameCount = 0,
+    ulong LastFrameChecksum = 0,
+    ulong LastPresentedChecksum = 0,
+    DateTimeOffset? LastDecodedAt = null,
+    DateTimeOffset? LastPaintAt = null,
+    DateTimeOffset? LastPresentedAt = null,
+    int LastPaintResult = 0,
+    bool OwnWindowPixelsDetected = false,
+    bool DesktopPixelsDetected = false,
+    bool DesktopAnimationDetected = false,
+    bool TestPatternMarkerDetected = false,
+    long InvalidationRequestCount = 0,
+    long TestPatternTickCount = 0);
+
+public static class RendererSelfTestPattern
+{
+    // COLORREF / 32-bit BGRA values. These colors are intentionally uncommon
+    // in camera footage so a desktop probe can distinguish the built-in test
+    // surface from a merely non-black desktop.
+    public const uint RedMarker = 0x00E62A2A;
+    public const uint GreenMarker = 0x002AE62A;
+    public const uint BlueMarker = 0x002A2AE6;
+    public const uint YellowMarker = 0x00E6E62A;
+    public static IReadOnlyList<(double X, double Y)> MarkerPositions { get; } =
+    [
+        (0.42, 0.12), (0.58, 0.12), (0.42, 0.88), (0.58, 0.88)
+    ];
+}
 
 public sealed record RendererEvent(
     string RendererId,

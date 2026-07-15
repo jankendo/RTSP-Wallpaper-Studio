@@ -34,16 +34,16 @@ public sealed class DesktopHostDiscovery
             return Failure(DesktopLayoutStrategy.Unknown, "DESKTOP_PROGMAN_NOT_FOUND", "Progmanが見つかりません。", 0);
         }
 
-        var legacy = _legacy.DiscoverExisting(progman);
-        if (legacy.Success)
-        {
-            return WithCandidateDiagnostics(legacy);
-        }
-
         var raised = _raised.DiscoverExisting(progman);
         if (raised.Success)
         {
             return WithCandidateDiagnostics(raised);
+        }
+
+        var legacy = _legacy.DiscoverExisting(progman);
+        if (legacy.Success)
+        {
+            return WithCandidateDiagnostics(legacy);
         }
 
         return WithCandidateDiagnostics(Failure(

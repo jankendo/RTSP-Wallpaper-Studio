@@ -226,7 +226,13 @@
                             <Border Background="{DynamicResource ButtonBackground}" CornerRadius="8" Padding="16"><TextBlock Text="{Binding DiagnosticsText}" FontFamily="Consolas" TextWrapping="Wrap" /></Border>
                             <TextBlock Text="{Binding ConnectionTestTechnicalDetails}" Foreground="{DynamicResource MutedInk}" TextWrapping="Wrap" Margin="0,16,0,0" />
                             <TextBlock Text="{Binding SafeModeMessage}" Foreground="#9A5E00" TextWrapping="Wrap" Margin="0,16,0,0" /><TextBlock Text="{Binding HotkeyWarning}" Foreground="{DynamicResource DangerBackground}" TextWrapping="Wrap" Margin="0,8,0,0" />
-                            <StackPanel Orientation="Horizontal" Margin="0,20,0,0"><Button Content="Rendererを再接続" Command="{Binding ReconnectCommand}" Style="{StaticResource SecondaryButton}" /><Button Content="デスクトップを再探索" Command="{Binding ResetDesktopCommand}" Style="{StaticResource SecondaryButton}" /><Button Content="ログフォルダーを開く" Command="{Binding OpenLogsCommand}" Style="{StaticResource QuietButton}" /></StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,20,0,0" MaxWidth="760" TextElement.FontSize="13">
+                                <Button Content="壁紙描画セルフテスト" Command="{Binding WallpaperSelfTestCommand}" AutomationProperties.AutomationId="WallpaperSelfTestButton" Style="{StaticResource PrimaryButton}" />
+                                <Button Content="診断パッケージを作成" Command="{Binding CreateDiagnosticsPackageCommand}" AutomationProperties.AutomationId="CreateDiagnosticsPackageButton" Style="{StaticResource SecondaryButton}" />
+                                <Button Content="Rendererを再接続" Command="{Binding ReconnectCommand}" Style="{StaticResource SecondaryButton}" />
+                                <Button Content="デスクトップを再探索" Command="{Binding ResetDesktopCommand}" Style="{StaticResource SecondaryButton}" />
+                                <Button Content="ログフォルダーを開く" Command="{Binding OpenLogsCommand}" Style="{StaticResource QuietButton}" />
+                            </StackPanel>
                         </StackPanel>
                     </Border>
 

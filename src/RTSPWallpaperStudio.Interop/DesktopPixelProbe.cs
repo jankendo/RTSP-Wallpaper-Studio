@@ -128,11 +128,110 @@ public static class DesktopPixelProbe
         return new(count, changed, totalDelta / count);
     }
 
+    public static TestPatternMarkerProbe ProbeTestPatternMarkers(RectD rect)
+    {
+        var expected = new[]
+        {
+            RendererSelfTestPattern.RedMarker,
+            RendererSelfTestPattern.GreenMarker,
+            RendererSelfTestPattern.BlueMarker,
+            RendererSelfTestPattern.YellowMarker
+        };
+        var positions = RendererSelfTestPattern.MarkerPositions;
+        var colors = new List<uint>(positions.Count);
+        var matched = 0;
+        var screenDc = GetDC(0);
+        if (screenDc == 0)
+        {
+            return new(false, 0, Array.Empty<uint>(), $"GetDC failed Win32={Marshal.GetLastWin32Error()}");
+        }
+
+        try
+        {
+            for (var i = 0; i < positions.Count; i++)
+            {
+                var x = (int)Math.Round(rect.X + rect.Width * positions[i].Item1);
+                var y = (int)Math.Round(rect.Y + rect.Height * positions[i].Item2);
+                var colorRef = GetPixel(screenDc, x, y);
+                var rgb = (uint)(((colorRef & 0xFF) << 16) | (colorRef & 0xFF00) | ((colorRef >> 16) & 0xFF));
+                colors.Add(rgb);
+                if (ColorDistance(rgb, expected[i]) <= 75)
+                {
+                    matched++;
+                }
+            }
+        }
+        finally
+        {
+            _ = ReleaseDC(0, screenDc);
+        }
+
+        return new(matched == expected.Length, matched, colors,
+            $"matched={matched}/{expected.Length}; expected=red,green,blue,yellow");
+    }
+
+    public static TestPatternMarkerProbe ProbeWindowTestPatternMarkers(nint hwnd)
+    {
+        var expected = new[]
+        {
+            RendererSelfTestPattern.RedMarker,
+            RendererSelfTestPattern.GreenMarker,
+            RendererSelfTestPattern.BlueMarker,
+            RendererSelfTestPattern.YellowMarker
+        };
+        var positions = RendererSelfTestPattern.MarkerPositions;
+        if (!NativeMethods.IsWindow(hwnd) || !NativeMethods.GetClientRect(hwnd, out var client))
+        {
+            return new(false, 0, Array.Empty<uint>(), "Renderer HWND/client rect is invalid");
+        }
+
+        var colors = new List<uint>(positions.Count);
+        var matched = 0;
+        var windowDc = GetDC(hwnd);
+        if (windowDc == 0)
+        {
+            return new(false, 0, Array.Empty<uint>(), $"GetDC(hwnd) failed Win32={Marshal.GetLastWin32Error()}");
+        }
+
+        try
+        {
+            var width = Math.Max(1, client.Right - client.Left);
+            var height = Math.Max(1, client.Bottom - client.Top);
+            for (var i = 0; i < positions.Count; i++)
+            {
+                var x = (int)Math.Round((width - 1) * positions[i].X);
+                var y = (int)Math.Round((height - 1) * positions[i].Y);
+                var colorRef = GetPixel(windowDc, x, y);
+                var rgb = (uint)(((colorRef & 0xFF) << 16) | (colorRef & 0xFF00) | ((colorRef >> 16) & 0xFF));
+                colors.Add(rgb);
+                if (ColorDistance(rgb, expected[i]) <= 75)
+                {
+                    matched++;
+                }
+            }
+        }
+        finally
+        {
+            _ = ReleaseDC(hwnd, windowDc);
+        }
+
+        return new(matched == expected.Length, matched, colors,
+            $"window matched={matched}/{expected.Length}; expected=red,green,blue,yellow");
+    }
+
+    private static int ColorDistance(uint left, uint right) =>
+        Math.Abs((int)((left >> 16) & 0xFF) - (int)((right >> 16) & 0xFF)) +
+        Math.Abs((int)((left >> 8) & 0xFF) - (int)((right >> 8) & 0xFF)) +
+        Math.Abs((int)(left & 0xFF) - (int)(right & 0xFF));
+
     [DllImport("user32.dll", SetLastError = true)]
     private static extern nint GetDC(nint hwnd);
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern int ReleaseDC(nint hwnd, nint hdc);
+
+    [DllImport("gdi32.dll", SetLastError = true)]
+    private static extern uint GetPixel(nint hdc, int x, int y);
 
     private const uint DibRgbColors = 0;
     private const uint BiRgb = 0;
@@ -209,3 +308,5 @@ public sealed record DesktopPixelDiff(int ComparedSamples, int ChangedSamples, d
 {
     public bool HasMovement => ChangedSamples > 0 && AverageAbsoluteRgbDelta >= 6;
 }
+
+public sealed record TestPatternMarkerProbe(bool Detected, int MatchedMarkers, IReadOnlyList<uint> Colors, string Diagnostic);

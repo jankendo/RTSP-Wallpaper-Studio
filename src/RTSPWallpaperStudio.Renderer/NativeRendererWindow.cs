@@ -13,6 +13,16 @@ internal sealed class NativeRendererWindow : IDisposable
     private static ushort _classAtom;
     private bool _disposed;
     private SoftwareVideoFrameBuffer? _frameBuffer;
+    private TestPatternSurface? _testPattern;
+    private long _paintRequestCount;
+    private long _paintCount;
+    private long _presentedFrameCount;
+    private long _invalidationRequestCount;
+    private DateTimeOffset? _lastPaintAt;
+    private DateTimeOffset? _lastPresentedAt;
+    private ulong _lastPresentedChecksum;
+    private int _lastPaintResult;
+    private TaskCompletionSource<RendererPresentationMetrics> _firstPresentation = CreatePresentationSource();
 
     public NativeRendererWindow()
     {
@@ -42,11 +52,69 @@ internal sealed class NativeRendererWindow : IDisposable
 
     public nint Hwnd { get; }
 
+    public void ResetPresentationObservation()
+    {
+        _firstPresentation = CreatePresentationSource();
+        Interlocked.Exchange(ref _paintRequestCount, 0);
+        Interlocked.Exchange(ref _paintCount, 0);
+        Interlocked.Exchange(ref _presentedFrameCount, 0);
+        Interlocked.Exchange(ref _invalidationRequestCount, 0);
+        _lastPaintAt = null;
+        _lastPresentedAt = null;
+        _lastPresentedChecksum = 0;
+        _lastPaintResult = 0;
+    }
+
     public void SetFrameBuffer(SoftwareVideoFrameBuffer? frameBuffer)
     {
         EnsureNotDisposed();
+        _testPattern?.Dispose();
+        _testPattern = null;
         _frameBuffer = frameBuffer;
         InvalidateVideoFrame();
+    }
+
+    public void SetTestPattern()
+    {
+        EnsureNotDisposed();
+        _frameBuffer = null;
+        _testPattern?.Dispose();
+        _testPattern = new TestPatternSurface(() =>
+        {
+            if (!_disposed)
+            {
+                _ = RendererWin32.SendMessage(Hwnd, RendererWin32.WmRenderTick, 1, 0);
+            }
+        });
+        InvalidateVideoFrame();
+    }
+
+    public Task<RendererPresentationMetrics> WaitForPresentationAsync(TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        return _firstPresentation.Task.WaitAsync(timeout, cancellationToken);
+    }
+
+    public RendererPresentationMetrics GetPresentationMetrics()
+    {
+        var frameBuffer = _frameBuffer;
+        return new RendererPresentationMetrics(
+            frameBuffer?.FrameCount ?? _testPattern?.FrameNumber ?? 0,
+            frameBuffer?.FrameCount ?? 0,
+            Interlocked.Read(ref _paintRequestCount),
+            Interlocked.Read(ref _paintCount),
+            Interlocked.Read(ref _presentedFrameCount),
+            frameBuffer?.LastFrameChecksum ?? _testPattern?.LastChecksum ?? 0,
+            _lastPresentedChecksum,
+            frameBuffer?.LastFrameAt,
+            _lastPaintAt,
+            _lastPresentedAt,
+            _lastPaintResult,
+            _lastPaintResult > 0 && (frameBuffer?.HasFrame == true || _testPattern?.HasRenderedFrame == true),
+            false,
+            false,
+            _testPattern?.HasRenderedFrame == true,
+            Interlocked.Read(ref _invalidationRequestCount),
+            _testPattern?.TickCount ?? 0);
     }
 
     public void InvalidateVideoFrame()
@@ -61,6 +129,7 @@ internal sealed class NativeRendererWindow : IDisposable
     {
         EnsureNotDisposed();
         RendererWin32.ShowWindow(Hwnd, RendererWin32.SwShow);
+        RendererWin32.UpdateWindow(Hwnd);
     }
 
     public void Hide()
@@ -125,6 +194,8 @@ internal sealed class NativeRendererWindow : IDisposable
 
         _disposed = true;
         _frameBuffer = null;
+        _testPattern?.Dispose();
+        _testPattern = null;
         Instances.TryRemove(Hwnd, out _);
         if (Hwnd != 0)
         {
@@ -167,6 +238,12 @@ internal sealed class NativeRendererWindow : IDisposable
             {
                 return 1;
             }
+
+            if (message == RendererWin32.WmRenderTick)
+            {
+                window.InvalidateVideoFrameImmediately();
+                return 0;
+            }
         }
 
         if (message == RendererWin32.WmDestroy)
@@ -185,21 +262,48 @@ internal sealed class NativeRendererWindow : IDisposable
 
     private void Paint()
     {
+        Interlocked.Increment(ref _paintRequestCount);
         var hdc = RendererWin32.BeginPaint(Hwnd, out var paintStruct);
         try
         {
-            if (hdc == 0 || _frameBuffer is null || !RendererWin32.GetClientRect(Hwnd, out var clientRect))
+            if (hdc == 0 || !RendererWin32.GetClientRect(Hwnd, out var clientRect))
             {
                 return;
             }
 
-            _frameBuffer.Paint(hdc, clientRect.Right - clientRect.Left, clientRect.Bottom - clientRect.Top);
+            var width = clientRect.Right - clientRect.Left;
+            var height = clientRect.Bottom - clientRect.Top;
+            var result = _frameBuffer?.Paint(hdc, width, height) ??
+                         _testPattern?.Paint(hdc, width, height, Hwnd, Environment.ProcessId) ?? 0;
+            _lastPaintResult = result;
+            _lastPaintAt = DateTimeOffset.UtcNow;
+            if (result > 0)
+            {
+                Interlocked.Increment(ref _paintCount);
+                Interlocked.Increment(ref _presentedFrameCount);
+                _lastPresentedChecksum = _frameBuffer?.LastFrameChecksum ?? _testPattern?.LastChecksum ?? 0;
+                _lastPresentedAt = DateTimeOffset.UtcNow;
+                _firstPresentation.TrySetResult(GetPresentationMetrics());
+            }
         }
         finally
         {
             RendererWin32.EndPaint(Hwnd, ref paintStruct);
         }
     }
+
+    private void InvalidateVideoFrameImmediately()
+    {
+        if (!_disposed && Hwnd != 0)
+        {
+            Interlocked.Increment(ref _invalidationRequestCount);
+            _ = RendererWin32.InvalidateRect(Hwnd, 0, false);
+            _ = RendererWin32.UpdateWindow(Hwnd);
+        }
+    }
+
+    private static TaskCompletionSource<RendererPresentationMetrics> CreatePresentationSource() =>
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private void EnsureNotDisposed()
     {

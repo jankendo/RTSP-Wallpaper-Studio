@@ -23,9 +23,12 @@ internal static class RendererWin32
     internal const uint WmEraseBkgnd = 0x0014;
     internal const uint WmPaint = 0x000F;
     internal const uint WmNcDestroy = 0x0082;
+    internal const uint WmTimer = 0x0113;
+    internal const uint WmRenderTick = 0x8001;
     internal const uint DibRgbColors = 0;
     internal const uint SrcCopy = 0x00CC0020;
     internal const uint BiRgb = 0;
+    internal const int Transparent = 1;
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     internal struct WndClassEx
@@ -137,12 +140,19 @@ internal static class RendererWin32
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool PostMessage(nint hwnd, uint message, nuint wParam, nint lParam);
 
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern nint SendMessage(nint hwnd, uint message, nuint wParam, nint lParam);
+
     [DllImport("user32.dll")]
     internal static extern void PostQuitMessage(int exitCode);
 
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool ShowWindow(nint hwnd, int command);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool UpdateWindow(nint hwnd);
 
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern nint SetParent(nint child, nint parent);
@@ -171,10 +181,44 @@ internal static class RendererWin32
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern nint InvalidateRect(nint hwnd, nint rect, [MarshalAs(UnmanagedType.Bool)] bool erase);
 
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern nuint SetTimer(nint hwnd, nuint timerId, uint milliseconds, nint timerCallback);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool KillTimer(nint hwnd, nuint timerId);
+
     [DllImport("gdi32.dll", SetLastError = true)]
     internal static extern int StretchDIBits(nint hdc, int xDest, int yDest, int destWidth, int destHeight,
         int xSrc, int ySrc, int srcWidth, int srcHeight, nint bits, ref BitmapInfo bitmapInfo,
         uint usage, uint rasterOperation);
+
+    [DllImport("gdi32.dll", SetLastError = true)]
+    internal static extern nint CreateSolidBrush(uint color);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern int FillRect(nint hdc, ref Rect rect, nint brush);
+
+    [DllImport("gdi32.dll", SetLastError = true)]
+    internal static extern uint SetTextColor(nint hdc, uint color);
+
+    [DllImport("gdi32.dll", SetLastError = true)]
+    internal static extern int SetBkMode(nint hdc, int mode);
+
+    [DllImport("gdi32.dll", EntryPoint = "CreateFontW", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern nint CreateFont(int height, int width, int escapement, int orientation, int weight,
+        uint italic, uint underline, uint strikeOut, uint charSet, uint outputPrecision, uint clipPrecision,
+        uint quality, uint pitchAndFamily, string faceName);
+
+    [DllImport("gdi32.dll", SetLastError = true)]
+    internal static extern nint SelectObject(nint hdc, nint objectHandle);
+
+    [DllImport("gdi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool DeleteObject(nint objectHandle);
+
+    [DllImport("user32.dll", EntryPoint = "DrawTextW", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern int DrawText(nint hdc, string text, int characterCount, ref Rect rect, uint format);
 
     [DllImport("kernel32.dll", EntryPoint = "GetModuleHandleW", CharSet = CharSet.Unicode)]
     internal static extern nint GetModuleHandle(string? moduleName);

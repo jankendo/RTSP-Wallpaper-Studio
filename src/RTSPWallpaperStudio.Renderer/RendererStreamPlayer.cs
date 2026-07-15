@@ -31,6 +31,9 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
     private readonly object _libVlcTraceLock = new();
     private readonly SemaphoreSlim _operationLock = new(1, 1);
     private readonly Stopwatch _frameClock = new();
+    private bool _testPatternRunning;
+    private DateTimeOffset? _testPatternStartedAt;
+    private bool _firstDecodedFrameReported;
 
     public RendererStreamPlayer(NativeRendererWindow window, DesktopHostController desktopHost, Func<RendererEvent, Task> report)
     {
@@ -39,7 +42,153 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
         _report = report;
     }
 
-    public bool IsRunning => _player is not null;
+    private async Task<bool> StartTestPatternCoreAsync(RendererStartOptions options, bool suppressTransientFailure,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            _window.ResetPresentationObservation();
+            _window.SetTestPattern();
+            await ReportAsync(RendererEventType.StreamOpening,
+                userMessage: "LibVLCを使わないRenderer内蔵テストパターンを開始しました。",
+                technicalDetails: "mode=render-test-pattern; same-window-and-attachment-path=true");
+
+            var discovery = _desktopHost.DiscoverForApply();
+            await ReportAsync(RendererEventType.DesktopHostDiscovered,
+                userMessage: "デスクトップホストを探索し、候補と選択結果を記録しています。",
+                technicalDetails: discovery.Diagnostic);
+            var attach = _desktopHost.Attach(_window.Hwnd, _lastMonitor!, discovery);
+            if (!attach.Success)
+            {
+                await ReportAsync(RendererEventType.AttachmentFailed, attach.ErrorCode, attach.UserMessage, attach.TechnicalDetails);
+                return await FailStartAsync(attach.ErrorCode, attach.UserMessage, attach.TechnicalDetails,
+                    cancellationToken, suppressTransientFailure);
+            }
+
+            _lastDiscovery = attach.Discovery;
+            await ReportAsync(RendererEventType.AttachmentSucceeded, technicalDetails: attach.TechnicalDetails,
+                metrics: BuildMetrics(attach.Discovery));
+            await ReportAsync(RendererEventType.RendererAttached,
+                userMessage: "Renderer HWNDをデスクトップ配置経路へ接続しました。",
+                technicalDetails: attach.TechnicalDetails, metrics: BuildMetrics(attach.Discovery));
+            if (!_desktopHost.ValidateAttachment(_window.Hwnd, out var validationDiagnostic))
+            {
+                return await FailStartAsync(RendererErrorCodes.WallpaperParentMismatch,
+                    "壁紙配置の最終検証に失敗しました。Rendererは表示していません。", validationDiagnostic,
+                    cancellationToken, suppressTransientFailure);
+            }
+
+            await ReportAsync(RendererEventType.RendererBoundsValidated,
+                userMessage: "Rendererの親子関係とモニター矩形を検証しました。", metrics: BuildMetrics(attach.Discovery));
+            _window.ShowAfterValidation();
+            IsAttached = true;
+            _testPatternRunning = true;
+            _testPatternStartedAt = DateTimeOffset.UtcNow;
+            await ReportAsync(RendererEventType.RendererWindowVisibleFlagConfirmed,
+                userMessage: "Renderer HWNDの可視状態を確認しました。", metrics: BuildMetrics(attach.Discovery));
+            return await VerifyPresentedWallpaperAsync(attach.Discovery!, testPattern: true, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            return await FailStartAsync(RendererErrorCodes.WallpaperPresentationFailed,
+                "内蔵テストパターンをデスクトップへ表示できませんでした。", ex.ToString(),
+                cancellationToken, suppressTransientFailure);
+        }
+    }
+
+    private async Task<bool> VerifyPresentedWallpaperAsync(DesktopHostDiscoveryResult discovery, bool testPattern,
+        CancellationToken cancellationToken)
+    {
+        RendererPresentationMetrics presentation;
+        try
+        {
+            presentation = await _window.WaitForPresentationAsync(TimeSpan.FromSeconds(8), cancellationToken);
+        }
+        catch (TimeoutException)
+        {
+            return await FailAsync(RendererErrorCodes.WallpaperPresentationFailed,
+                "RendererのGDI描画結果を確認できませんでした。壁紙は成功扱いにしません。",
+                $"presentation={_window.GetPresentationMetrics()}", cancellationToken);
+        }
+
+        if (testPattern)
+        {
+            await ReportAsync(RendererEventType.RendererSelfTestFrameRendered,
+                userMessage: "内蔵テストパターンのGDI描画を確認しました。", metrics: BuildMetrics(discovery));
+        }
+        else
+        {
+            await ReportAsync(RendererEventType.RtspFramePaintRequested,
+                userMessage: "Renderer HWNDへのGDIペイント要求を確認しました。",
+                technicalDetails: $"paintRequests={presentation.PaintRequestCount}; paints={presentation.PaintCount}",
+                metrics: BuildMetrics(discovery));
+            await ReportAsync(RendererEventType.RtspFramePresented,
+                userMessage: "RTSPデコードフレームが同じRenderer HWNDへGDI転送されたことを確認しました。",
+                metrics: BuildMetrics(discovery));
+        }
+
+        var ownWindowPixels = presentation.PresentedFrameCount > 0 &&
+                              presentation.LastPresentedChecksum != 0 &&
+                              presentation.LastPaintResult > 0;
+        await ReportAsync(RendererEventType.RendererPixelsDetectedOnOwnWindow,
+            userMessage: ownWindowPixels ? "Renderer自身の描画結果を検出しました。" : "Renderer自身の描画結果を検出できませんでした。",
+            technicalDetails: presentation.ToString(), metrics: BuildMetrics(discovery));
+
+        var rect = _lastMonitor?.Bounds ?? new RectD();
+        var first = DesktopPixelProbe.Sample(rect);
+        await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+        var second = DesktopPixelProbe.Sample(rect);
+        var diff = DesktopPixelProbe.Compare(first, second);
+        var marker = testPattern ? DesktopPixelProbe.ProbeTestPatternMarkers(rect) : null;
+        var ownMarker = testPattern ? DesktopPixelProbe.ProbeWindowTestPatternMarkers(_window.Hwnd) : null;
+        var latestPresentation = _window.GetPresentationMetrics();
+        var patternProgressed = latestPresentation.PresentedFrameCount > presentation.PresentedFrameCount &&
+                                latestPresentation.LastPresentedChecksum != presentation.LastPresentedChecksum;
+        var desktopPixels = first.HasNonBlackPixels;
+        var animation = diff.HasMovement;
+        var iconsRemainVisible = NativeWindowDiagnostics.IsWindow(discovery.ShellViewHwnd) &&
+                                 NativeWindowDiagnostics.GetClassName(discovery.ShellViewHwnd) == "SHELLDLL_DefView";
+        var verified = IsAttached && ownWindowPixels && desktopPixels &&
+                       iconsRemainVisible &&
+                       (!testPattern || (ownMarker?.Detected == true && patternProgressed && animation));
+
+        var enrichedPresentation = latestPresentation with
+        {
+            OwnWindowPixelsDetected = ownWindowPixels,
+            DesktopPixelsDetected = desktopPixels,
+            DesktopAnimationDetected = animation,
+            TestPatternMarkerDetected = marker?.Detected == true || ownMarker?.Detected == true
+        };
+        var metrics = (BuildMetrics(discovery) ?? throw new InvalidOperationException("Renderer metricsを作成できません。")) with
+        { Presentation = enrichedPresentation };
+        await ReportAsync(RendererEventType.RendererPixelsDetectedOnDesktop,
+            userMessage: desktopPixels ? "実デスクトップDC上のRenderer領域に画素を検出しました。" : "実デスクトップDC上にRenderer画素を検出できませんでした。",
+            technicalDetails: JsonSerializer.Serialize(new { first, second, marker, ownMarker, patternProgressed }), metrics: metrics);
+        await ReportAsync(RendererEventType.RendererAnimationDetectedOnDesktop,
+            userMessage: animation ? "実デスクトップ上の連続サンプルに変化を検出しました。" : "実デスクトップ上の連続サンプルに変化を検出できませんでした。",
+            technicalDetails: JsonSerializer.Serialize(new { diff }), metrics: metrics);
+        await ReportAsync(RendererEventType.DesktopIconsRemainVisible,
+            userMessage: iconsRemainVisible ? "Shellのアイコンホストを確認しました。" : "Shellのアイコンホストを確認できませんでした。",
+            technicalDetails: $"shellView=0x{discovery.ShellViewHwnd.ToInt64():X}; class={NativeWindowDiagnostics.GetClassName(discovery.ShellViewHwnd)}",
+            metrics: metrics);
+
+        if (!verified)
+        {
+            return await FailAsync(RendererErrorCodes.WallpaperEndToEndVerificationFailed,
+                "壁紙の実描画を最後まで検証できなかったため、成功扱いにしません。",
+                JsonSerializer.Serialize(new { ownWindowPixels, desktopPixels, animation, marker, ownMarker, patternProgressed, iconsRemainVisible, presentation, latestPresentation }),
+                cancellationToken);
+        }
+
+        await ReportAsync(RendererEventType.WallpaperVisible, userMessage: "壁紙の実描画を確認しました。", metrics: metrics);
+        await ReportAsync(RendererEventType.PlaybackRunning, userMessage: "再生中です。", metrics: metrics);
+        await ReportAsync(RendererEventType.WallpaperEndToEndVerified,
+            userMessage: "Renderer起動、HWND、WorkerW配置、GDI描画、実デスクトップ画素、継続検証を完了しました。",
+            technicalDetails: JsonSerializer.Serialize(new { testPattern, first, second, diff, marker, ownMarker, patternProgressed, iconsRemainVisible }), metrics: metrics);
+        return true;
+    }
+
+    public bool IsRunning => _player is not null || _testPatternRunning;
     public bool IsAttached { get; private set; }
 
     public async Task<bool> StartAsync(RendererStartOptions options, bool recoverShell = false, CancellationToken cancellationToken = default)
@@ -49,7 +198,7 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
         {
             _lastStartFailureDetails = null;
             var policy = new ReconnectPolicy();
-            const int maxAttempts = 5;
+            var maxAttempts = options.RenderTestPattern ? 1 : 5;
             for (var attempt = 0; attempt < maxAttempts && !cancellationToken.IsCancellationRequested; attempt++)
             {
                 if (await StartCoreAsync(options, recoverShell, cancellationToken, suppressTransientFailure: true))
@@ -67,9 +216,10 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
 
             if (!cancellationToken.IsCancellationRequested)
             {
-                await ReportAsync(RendererEventType.FatalError, RendererErrorCodes.RtspOpenFailed,
-                    "RTSP配信元が起動しないため、壁紙を設定できません。",
-                    $"初回接続を5回試行しました。go2rtc、カメラ、URL、認証情報を確認してください。\n最終試行の詳細: {_lastStartFailureDetails ?? "詳細なし"}");
+                await ReportAsync(RendererEventType.FatalError,
+                    options.RenderTestPattern ? RendererErrorCodes.WallpaperEndToEndVerificationFailed : RendererErrorCodes.RtspOpenFailed,
+                    options.RenderTestPattern ? "内蔵テストパターンの実デスクトップ検証に失敗しました。" : "RTSP配信元が起動しないため、壁紙を設定できません。",
+                    $"試行回数={maxAttempts}; go2rtc、カメラ、URL、認証情報、Renderer画素検証を確認してください。\n最終試行の詳細: {_lastStartFailureDetails ?? "詳細なし"}");
             }
 
             return false;
@@ -109,6 +259,12 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
             _libVlcTrace.Clear();
         }
         _frameClock.Restart();
+        _firstDecodedFrameReported = false;
+        if (options.RenderTestPattern)
+        {
+            return await StartTestPatternCoreAsync(options, suppressTransientFailure, cancellationToken);
+        }
+
         try
         {
             LibVLCSharp.Shared.Core.Initialize();
@@ -123,6 +279,7 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
                 Mute = true
             };
             _frameBuffer = new SoftwareVideoFrameBuffer(_window.InvalidateVideoFrame, OnFrameDisplayed);
+            _window.ResetPresentationObservation();
             _window.SetFrameBuffer(_frameBuffer);
             _frameBuffer.Configure(_player);
             _player.EncounteredError += OnEncounteredError;
@@ -183,17 +340,24 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
             _lastDiscovery = attach.Discovery;
             await ReportAsync(RendererEventType.AttachmentSucceeded, technicalDetails: attach.TechnicalDetails,
                 metrics: BuildMetrics(attach.Discovery));
+            await ReportAsync(RendererEventType.RendererAttached,
+                userMessage: "Renderer HWNDをデスクトップ配置経路へ接続しました。",
+                technicalDetails: attach.TechnicalDetails, metrics: BuildMetrics(attach.Discovery));
             if (!_desktopHost.ValidateAttachment(_window.Hwnd, out var validationDiagnostic))
             {
                 return await FailAsync(RendererErrorCodes.WallpaperParentMismatch,
                     "壁紙配置の最終検証に失敗しました。Rendererは表示していません。", validationDiagnostic, cancellationToken);
             }
 
+            await ReportAsync(RendererEventType.RendererBoundsValidated,
+                userMessage: "Rendererの親子関係とモニター矩形を検証しました.",
+                metrics: BuildMetrics(attach.Discovery));
+
             _window.ShowAfterValidation();
             IsAttached = true;
-            await ReportAsync(RendererEventType.WallpaperVisible, userMessage: "壁紙を表示しました。", metrics: BuildMetrics(attach.Discovery));
-            await ReportAsync(RendererEventType.PlaybackRunning, userMessage: "再生中です。", metrics: BuildMetrics(attach.Discovery));
-            return true;
+            await ReportAsync(RendererEventType.RendererWindowVisibleFlagConfirmed,
+                userMessage: "Renderer HWNDの可視状態を確認しました。", metrics: BuildMetrics(attach.Discovery));
+            return await VerifyPresentedWallpaperAsync(discovery, testPattern: false, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -299,6 +463,15 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
 
     public PlaybackHealthSnapshot GetPlaybackHealth()
     {
+        if (_testPatternRunning)
+        {
+            var elapsed = (long)Math.Max(0, (DateTimeOffset.UtcNow - (_testPatternStartedAt ?? DateTimeOffset.UtcNow)).TotalMilliseconds);
+            _progressTracker.Observe(elapsed, DateTimeOffset.UtcNow);
+            var patternProgress = _progressTracker.Snapshot(DateTimeOffset.UtcNow);
+            return new PlaybackHealthSnapshot(true, 1, elapsed, patternProgress.LastProgressAt,
+                patternProgress.ProgressAge, true, patternProgress.StableSamples, 1);
+        }
+
         var player = _player;
         if (player is not null && _frameBuffer is null)
         {
@@ -400,6 +573,8 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
         }
 
         _window.SetFrameBuffer(null);
+        _testPatternRunning = false;
+        _testPatternStartedAt = null;
         _frameBuffer?.Dispose();
         _frameBuffer = null;
         _frameClock.Stop();
@@ -496,6 +671,16 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
         // this path, measured against a monotonic clock to retain stall and
         // fast-forward protection without depending on live-media timestamps.
         _ = _progressTracker.Observe(_frameClock.ElapsedMilliseconds, DateTimeOffset.UtcNow);
+        if (!_firstDecodedFrameReported && _frameBuffer?.FrameCount >= 1)
+        {
+            _firstDecodedFrameReported = true;
+            _ = ReportAsync(RendererEventType.RtspDecodedFrameReceived,
+                userMessage: "LibVLCのデコードフレームを受信しました.",
+                technicalDetails: $"frameCount={_frameBuffer.FrameCount}; checksum=0x{_frameBuffer.LastFrameChecksum:X}");
+            _ = ReportAsync(RendererEventType.RtspFrameCopiedToBackBuffer,
+                userMessage: "デコードフレームをRendererのCPUバックバッファへコピーしました.",
+                technicalDetails: $"backBufferCopyCount={_frameBuffer.FrameCount}");
+        }
     }
 
     private string GetProgressTrace()
@@ -558,10 +743,12 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
             ? nint.Zero
             : effectiveDiscovery.HostHwnd;
         return new RendererMetrics(Environment.ProcessId, _window.Hwnd, parent, expectedParent,
-            health.VoutCount, _player?.State.ToString() ?? "Stopped", null, null, null,
+            health.VoutCount, _testPatternRunning ? "PlayingTestPattern" : _player?.State.ToString() ?? "Stopped",
+            _testPatternRunning ? "TEST_PATTERN" : null, null, null,
             _reconnectCount, effectiveDiscovery.Strategy, rect, _lastMonitor?.Bounds ?? new RectD(), health.MediaTimeMs,
             health.LastProgressAt, health.ProgressAge == TimeSpan.MaxValue ? null : health.ProgressAge.TotalSeconds,
-            NativeWindowDiagnostics.IsVisible(_window.Hwnd), windowClass, style, extendedStyle, root.ToInt64(), owner.ToInt64());
+            NativeWindowDiagnostics.IsVisible(_window.Hwnd), windowClass, style, extendedStyle, root.ToInt64(), owner.ToInt64(),
+            _window.GetPresentationMetrics());
     }
 
     private Task ReportAsync(RendererEventType type, string? errorCode = null, string? userMessage = null,

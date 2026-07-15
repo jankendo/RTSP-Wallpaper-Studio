@@ -23,6 +23,7 @@ public partial class MainViewModel : ObservableObject
     private readonly JsonSettingsStore _settingsStore;
     private readonly ProtectedSecretStore _secretStore;
     private readonly ConnectionTester _connectionTester;
+    private readonly DiagnosticsPackageService _diagnosticsPackageService;
     private readonly DesktopMonitorProvider _monitorProvider;
     private readonly RendererProcessManager _rendererManager;
     private readonly RuntimeStateStore _runtimeStateStore;
@@ -34,6 +35,7 @@ public partial class MainViewModel : ObservableObject
     private AppSettings _settings = new();
     private RuntimeState _runtimeState = new();
     private CancellationTokenSource? _connectionTestCts;
+    private RendererMetrics? _lastRendererMetrics;
 
     [ObservableProperty]
     private RtspProfile? _selectedProfile;
@@ -108,6 +110,7 @@ public partial class MainViewModel : ObservableObject
         JsonSettingsStore settingsStore,
         ProtectedSecretStore secretStore,
         ConnectionTester connectionTester,
+        DiagnosticsPackageService diagnosticsPackageService,
         DesktopMonitorProvider monitorProvider,
         RendererProcessManager rendererManager,
         RuntimeStateStore runtimeStateStore,
@@ -120,6 +123,7 @@ public partial class MainViewModel : ObservableObject
         _settingsStore = settingsStore;
         _secretStore = secretStore;
         _connectionTester = connectionTester;
+        _diagnosticsPackageService = diagnosticsPackageService;
         _monitorProvider = monitorProvider;
         _rendererManager = rendererManager;
         _runtimeStateStore = runtimeStateStore;
@@ -138,6 +142,8 @@ public partial class MainViewModel : ObservableObject
         ReconnectCommand = new AsyncRelayCommand(ReconnectAsync);
         ResetDesktopCommand = new AsyncRelayCommand(ResetDesktopAsync);
         SaveSettingsCommand = new AsyncRelayCommand(SaveSettingsAsync);
+        WallpaperSelfTestCommand = new AsyncRelayCommand(RunWallpaperSelfTestAsync);
+        CreateDiagnosticsPackageCommand = new AsyncRelayCommand(CreateDiagnosticsPackageAsync);
         NavigateCommand = new RelayCommand<string>(page => NavigateTo(page));
         OpenLogsCommand = new RelayCommand(OpenLogs);
         _rendererManager.RendererEventReceived += RendererManagerOnRendererEventReceived;
@@ -162,6 +168,8 @@ public partial class MainViewModel : ObservableObject
     public IAsyncRelayCommand ReconnectCommand { get; }
     public IAsyncRelayCommand ResetDesktopCommand { get; }
     public IAsyncRelayCommand SaveSettingsCommand { get; }
+    public IAsyncRelayCommand WallpaperSelfTestCommand { get; }
+    public IAsyncRelayCommand CreateDiagnosticsPackageCommand { get; }
     public IRelayCommand<string> NavigateCommand { get; }
     public IRelayCommand OpenLogsCommand { get; }
     public Task InitializationTask { get; }
@@ -427,7 +435,7 @@ public partial class MainViewModel : ObservableObject
             SelectedProfile.LastStatus = PlaybackStatus.Starting;
             OnPropertyChanged(nameof(CurrentProfileStatus));
             StatusMessage = "Rendererへ設定を送信しました。最初の映像出力とデスクトップ配置を確認しています。";
-            FooterMessage = "成功表示はWallpaperVisibleイベント受信後だけに更新されます。";
+            FooterMessage = "GDI描画・実デスクトップ画素・継続表示の検証完了後だけ成功になります。";
         }
         catch (Exception ex)
         {
@@ -448,6 +456,57 @@ public partial class MainViewModel : ObservableObject
         }
 
         StatusMessage = "壁紙を停止しました。";
+    }
+
+    private async Task RunWallpaperSelfTestAsync()
+    {
+        var monitor = SelectedMonitor ?? Monitors.FirstOrDefault();
+        if (monitor is null)
+        {
+            StatusMessage = "セルフテスト対象のディスプレイが見つかりません。";
+            return;
+        }
+
+        try
+        {
+            await _rendererManager.StopAllAsync();
+            await _rendererManager.StartAsync(new RendererStartOptions(
+                "rtsp://127.0.0.1:8554/self-test",
+                null,
+                null,
+                TransportMode.Tcp,
+                300,
+                DisplayMode.Fill,
+                monitor.PersistentId,
+                Environment.ProcessId,
+                HardwareDecodeMode.Disabled,
+                true,
+                true));
+            StatusMessage = "壁紙描画セルフテストを実行中です。HWND、Raised Desktop、GDI、実画素を検証します。";
+            FooterMessage = "成功表示はWallpaperEndToEndVerifiedイベント受信後だけに更新されます。";
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "壁紙描画セルフテストの起動に失敗しました。");
+            StatusMessage = "壁紙描画セルフテストを起動できませんでした。";
+            FooterMessage = ex.Message;
+        }
+    }
+
+    private async Task CreateDiagnosticsPackageAsync()
+    {
+        try
+        {
+            var path = await _diagnosticsPackageService.CreateAsync(_lastRendererMetrics, "GUI diagnostics package command");
+            StatusMessage = "診断パッケージを作成しました。";
+            FooterMessage = path;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "診断パッケージの作成に失敗しました。");
+            StatusMessage = "診断パッケージの作成に失敗しました。";
+            FooterMessage = ex.Message;
+        }
     }
 
     private async Task EmergencyStopAsync()
@@ -544,6 +603,10 @@ public partial class MainViewModel : ObservableObject
 
     private void ApplyRendererEvent(RendererEvent rendererEvent)
     {
+        if (rendererEvent.Metrics is { } eventMetrics)
+        {
+            _lastRendererMetrics = eventMetrics;
+        }
         UpdatePlaybackHealth(rendererEvent);
         if (rendererEvent.Type != RendererEventType.Heartbeat)
         {
@@ -575,7 +638,7 @@ public partial class MainViewModel : ObservableObject
                 if (SelectedProfile is not null) SelectedProfile.LastStatus = PlaybackStatus.Reconnecting;
                 StatusMessage = "RTSPストリームを再接続しています。";
                 break;
-            case RendererEventType.WallpaperVisible:
+            case RendererEventType.WallpaperEndToEndVerified:
                 if (SelectedProfile is not null)
                 {
                     SelectedProfile.LastStatus = PlaybackStatus.Playing;
@@ -588,8 +651,11 @@ public partial class MainViewModel : ObservableObject
                     OnPropertyChanged(nameof(CurrentProfileStatus));
                 }
 
-                StatusMessage = "壁紙を表示しました。映像出力・親ウィンドウ・矩形検証を通過しています。";
+                StatusMessage = "壁紙を表示しました。GDI描画・実デスクトップ画素・継続表示まで検証済みです。";
                 FooterMessage = "再生中です。Ctrl + Alt + Shift + F12 でいつでも停止できます。";
+                break;
+            case RendererEventType.WallpaperVisible:
+                StatusMessage = "Renderer HWNDは可視ですが、最終成功判定を継続検証しています。";
                 break;
             case RendererEventType.PlaybackRunning:
                 StatusMessage = "再生中です。";

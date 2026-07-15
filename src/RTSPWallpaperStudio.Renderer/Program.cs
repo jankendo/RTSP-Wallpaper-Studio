@@ -51,6 +51,9 @@ internal static class Program
         await ipc.SendEventAsync(new RendererEvent(commandLine.RendererId, RendererEventType.RendererReady, DateTimeOffset.UtcNow,
             UserMessage: "Rendererを起動しました。"), lifetime.Token);
         Trace("RendererReady送信完了");
+        await ipc.SendEventAsync(new RendererEvent(commandLine.RendererId, RendererEventType.RendererWindowCreated,
+            DateTimeOffset.UtcNow, UserMessage: "Renderer専用HWNDを作成しました。",
+            TechnicalDetails: $"hwnd=0x{window.Hwnd.ToInt64():X}; class={NativeRendererWindow.ClassName}; processId={Environment.ProcessId}"), lifetime.Token);
 
         Trace("コマンドループ開始");
         var commandLoop = ipc.RunCommandLoopAsync(async message =>

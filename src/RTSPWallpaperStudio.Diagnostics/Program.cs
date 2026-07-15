@@ -18,17 +18,26 @@ internal static class Program
         var options = Parse(args);
         if (options.ShowHelp)
         {
-            Console.WriteLine("Usage: RTSPWallpaperStudio.Diagnostics.exe --url <rtsp-url> [--transport tcp|udp|automatic] [--timeout 10] [--cache 300] [--start-go2rtc] [--wallpaper|--wallpaper-only] [--desktop-probe] [--hold-seconds 30] [--ipc-smoke]");
+            Console.WriteLine("Usage: RTSPWallpaperStudio.Diagnostics.exe --url <rtsp-url> [--transport tcp|udp|automatic] [--timeout 10] [--cache 300] [--start-go2rtc] [--wallpaper|--wallpaper-only] [--render-test-pattern] [--desktop-probe] [--hold-seconds 30] [--ipc-smoke]");
             Console.WriteLine("       RTSPWallpaperStudio.Diagnostics.exe --probe-hwnd <hex-or-decimal-hwnd> [--probe-seconds 1]");
             Console.WriteLine("       RTSPWallpaperStudio.Diagnostics.exe --startup-status");
             Console.WriteLine("       RTSPWallpaperStudio.Diagnostics.exe --startup-enable [--startup-exe <RTSPWallpaperStudio.App.exe>]");
             Console.WriteLine("       RTSPWallpaperStudio.Diagnostics.exe --startup-disable");
+            Console.WriteLine("       RTSPWallpaperStudio.Diagnostics.exe --create-diagnostics-package");
             return 0;
         }
 
         if (options.StartupAction is not null)
         {
             return RunStartupCommand(options);
+        }
+
+        if (options.CreateDiagnosticsPackage)
+        {
+            var packagePath = await new DiagnosticsPackageService(new RTSPWallpaperStudio.Infrastructure.Paths.AppPathService())
+                .CreateAsync(null, "CLI diagnostics package command");
+            Console.WriteLine($"DIAGNOSTICS_PACKAGE={packagePath}");
+            return 0;
         }
 
         if (options.ProbeHwnd is not null)
@@ -59,7 +68,7 @@ internal static class Program
             return await RunIpcSmokeAsync(options, relay);
         }
 
-        if (options.WallpaperOnly)
+        if (options.WallpaperOnly || (options.RenderTestPattern && options.Wallpaper))
         {
             return await RunWallpaperOnlyAsync(options, relay);
         }
@@ -93,10 +102,10 @@ internal static class Program
             rendererManager.RendererEventReceived += (_, rendererEvent) =>
             {
                 var metrics = rendererEvent.Metrics is { } m
-                    ? $" metrics=state:{m.MediaState},vout:{m.VoutCount},time:{m.MediaTimeMs},age:{m.VideoProgressAgeSeconds:0.0}s,reconnect:{m.ReconnectCount},visible:{m.WindowVisible},class:{m.WindowClass},hwnd:0x{m.RendererHwnd.ToInt64():X},parent:0x{m.ParentHwnd.ToInt64():X},expectedParent:0x{m.ExpectedParentHwnd.ToInt64():X},rect:{m.RendererRect},monitor:{m.MonitorRect}"
+                    ? $" metrics=state:{m.MediaState},vout:{m.VoutCount},time:{m.MediaTimeMs},age:{m.VideoProgressAgeSeconds:0.0}s,reconnect:{m.ReconnectCount},visible:{m.WindowVisible},class:{m.WindowClass},hwnd:0x{m.RendererHwnd.ToInt64():X},parent:0x{m.ParentHwnd.ToInt64():X},expectedParent:0x{m.ExpectedParentHwnd.ToInt64():X},rect:{m.RendererRect},monitor:{m.MonitorRect},decoded:{m.Presentation?.DecodedFrameCount},paint:{m.Presentation?.PaintCount},presented:{m.Presentation?.PresentedFrameCount},checksum:0x{m.Presentation?.LastPresentedChecksum:X}"
                     : string.Empty;
                 Console.Error.WriteLine($"[renderer] {rendererEvent.Type} code={rendererEvent.ErrorCode ?? "-"} message={rendererEvent.UserMessage ?? "-"}{metrics} details={rendererEvent.TechnicalDetails ?? "-"}");
-                if (rendererEvent.Type == RendererEventType.WallpaperVisible)
+                if (rendererEvent.Type == RendererEventType.WallpaperEndToEndVerified)
                 {
                     visibleMetrics = rendererEvent.Metrics;
                     wallpaperResult.TrySetResult(true);
@@ -109,7 +118,7 @@ internal static class Program
 
             var startOptions = new RendererStartOptions(options.Url, options.UserName, options.Password,
                 options.Transport, options.CacheMs, DisplayMode.Fill, monitor.PersistentId, Environment.ProcessId,
-                options.HardwareDecode, true);
+                options.HardwareDecode, true, options.RenderTestPattern);
             await rendererManager.StartAsync(startOptions).WaitAsync(TimeSpan.FromSeconds(15));
             var wallpaperSucceeded = await wallpaperResult.Task.WaitAsync(TimeSpan.FromSeconds(Math.Max(30, options.TimeoutSeconds + 20)));
             Console.WriteLine($"WALLPAPER_RESULT={(wallpaperSucceeded ? "SUCCESS" : "FAILED")}");
@@ -158,6 +167,7 @@ internal static class Program
         string? user = null;
         string? password = null;
         var startGo2Rtc = false;
+        var renderTestPattern = false;
         var wallpaper = false;
         var wallpaperOnly = false;
         var ipcSmoke = false;
@@ -168,6 +178,7 @@ internal static class Program
         string? startupAction = null;
         string? startupExecutable = null;
         var help = false;
+        var createDiagnosticsPackage = false;
         for (var i = 0; i < args.Length; i++)
         {
             switch (args[i].ToLowerInvariant())
@@ -181,6 +192,7 @@ internal static class Program
                 case "--start-go2rtc": startGo2Rtc = true; break;
                 case "--wallpaper": wallpaper = true; break;
                 case "--wallpaper-only": wallpaper = true; wallpaperOnly = true; break;
+                case "--render-test-pattern": renderTestPattern = true; wallpaper = true; wallpaperOnly = true; break;
                 case "--ipc-smoke": ipcSmoke = true; break;
                 case "--desktop-probe": desktopProbe = true; break;
                 case "--probe-hwnd":
@@ -195,14 +207,15 @@ internal static class Program
                 case "--startup-enable": startupAction = "enable"; break;
                 case "--startup-disable": startupAction = "disable"; break;
                 case "--startup-exe": startupExecutable = args[++i]; break;
+                case "--create-diagnostics-package": createDiagnosticsPackage = true; break;
                 case "--transport": transport = Enum.Parse<TransportMode>(args[++i], ignoreCase: true); break;
                 case "--hardware": hardware = Enum.Parse<HardwareDecodeMode>(args[++i], ignoreCase: true); break;
                 default: throw new ArgumentException($"Unknown argument: {args[i]}");
             }
         }
 
-        return new DiagnosticOptions(url, user, password, transport, timeout, cache, hardware, startGo2Rtc, wallpaper, wallpaperOnly, ipcSmoke,
-            desktopProbe, probeHwnd, probeSeconds, holdSeconds, startupAction, startupExecutable, help);
+        return new DiagnosticOptions(url, user, password, transport, timeout, cache, hardware, startGo2Rtc, renderTestPattern, wallpaper, wallpaperOnly, ipcSmoke,
+            desktopProbe, probeHwnd, probeSeconds, holdSeconds, startupAction, startupExecutable, createDiagnosticsPackage, help);
     }
 
     private static int RunStartupCommand(DiagnosticOptions options)
@@ -300,10 +313,10 @@ internal static class Program
             rendererManager.RendererEventReceived += (_, rendererEvent) =>
             {
                 var metrics = rendererEvent.Metrics is { } m
-                    ? $" metrics=state:{m.MediaState},vout:{m.VoutCount},time:{m.MediaTimeMs},age:{m.VideoProgressAgeSeconds:0.0}s,reconnect:{m.ReconnectCount},visible:{m.WindowVisible},class:{m.WindowClass},hwnd:0x{m.RendererHwnd.ToInt64():X},parent:0x{m.ParentHwnd.ToInt64():X},expectedParent:0x{m.ExpectedParentHwnd.ToInt64():X},rect:{m.RendererRect},monitor:{m.MonitorRect}"
+                    ? $" metrics=state:{m.MediaState},vout:{m.VoutCount},time:{m.MediaTimeMs},age:{m.VideoProgressAgeSeconds:0.0}s,reconnect:{m.ReconnectCount},visible:{m.WindowVisible},class:{m.WindowClass},hwnd:0x{m.RendererHwnd.ToInt64():X},parent:0x{m.ParentHwnd.ToInt64():X},expectedParent:0x{m.ExpectedParentHwnd.ToInt64():X},rect:{m.RendererRect},monitor:{m.MonitorRect},decoded:{m.Presentation?.DecodedFrameCount},paint:{m.Presentation?.PaintCount},presented:{m.Presentation?.PresentedFrameCount},checksum:0x{m.Presentation?.LastPresentedChecksum:X}"
                     : string.Empty;
                 Console.Error.WriteLine($"[renderer] {rendererEvent.Type} code={rendererEvent.ErrorCode ?? "-"} message={rendererEvent.UserMessage ?? "-"}{metrics} details={rendererEvent.TechnicalDetails ?? "-"}");
-                if (rendererEvent.Type == RendererEventType.WallpaperVisible)
+                if (rendererEvent.Type == RendererEventType.WallpaperEndToEndVerified)
                 {
                     visibleMetrics = rendererEvent.Metrics;
                     wallpaperResult.TrySetResult(true);
@@ -316,7 +329,7 @@ internal static class Program
 
             var startOptions = new RendererStartOptions(options.Url, options.UserName, options.Password,
                 options.Transport, options.CacheMs, DisplayMode.Fill, monitor.PersistentId, Environment.ProcessId,
-                options.HardwareDecode, true);
+                options.HardwareDecode, true, options.RenderTestPattern);
             await rendererManager.StartAsync(startOptions).WaitAsync(TimeSpan.FromSeconds(15));
             var wallpaperSucceeded = await wallpaperResult.Task.WaitAsync(TimeSpan.FromSeconds(120));
             Console.WriteLine($"WALLPAPER_RESULT={(wallpaperSucceeded ? "SUCCESS" : "FAILED")}");
@@ -400,6 +413,6 @@ internal static class Program
     }
 
     private sealed record DiagnosticOptions(string Url, string? UserName, string? Password, TransportMode Transport,
-        int TimeoutSeconds, int CacheMs, HardwareDecodeMode HardwareDecode, bool StartGo2Rtc, bool Wallpaper, bool WallpaperOnly, bool IpcSmoke,
-        bool DesktopProbe, nint? ProbeHwnd, int ProbeSeconds, int HoldSeconds, string? StartupAction, string? StartupExecutable, bool ShowHelp);
+        int TimeoutSeconds, int CacheMs, HardwareDecodeMode HardwareDecode, bool StartGo2Rtc, bool RenderTestPattern, bool Wallpaper, bool WallpaperOnly, bool IpcSmoke,
+        bool DesktopProbe, nint? ProbeHwnd, int ProbeSeconds, int HoldSeconds, string? StartupAction, string? StartupExecutable, bool CreateDiagnosticsPackage, bool ShowHelp);
 }

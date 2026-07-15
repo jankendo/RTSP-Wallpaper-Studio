@@ -102,6 +102,9 @@ public sealed class RendererProcessManager : IAsyncDisposable
             // boundary interfering with the initial named-pipe handshake.
             job.Assign(process);
             session.StartEventLoop(cancellationToken);
+            PublishEvent(new RendererEvent(rendererId, RendererEventType.WallpaperCommandInvoked, DateTimeOffset.UtcNow,
+                UserMessage: "壁紙設定コマンドをRendererへ送信します。",
+                TechnicalDetails: $"rendererPid={process.Id}; rendererPath={rendererPath}; monitorId={options.MonitorId}; renderTestPattern={options.RenderTestPattern}"));
             await session.SendAsync(new IpcMessage(
                 IpcMessageKind.Command,
                 "start",
