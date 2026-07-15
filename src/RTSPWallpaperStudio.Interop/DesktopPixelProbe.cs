@@ -10,6 +10,59 @@ namespace RTSPWallpaperStudio.Interop;
 /// </summary>
 public static class DesktopPixelProbe
 {
+    public static DesktopPixelSample SampleShellBackground(RectD rect, int grid = 24)
+    {
+        var pixels = new List<uint>();
+        var screenDc = GetDC(0);
+        if (screenDc == 0)
+        {
+            return new(0, 0, 0, $"GetDC failed Win32={Marshal.GetLastWin32Error()}", Array.Empty<uint>());
+        }
+
+        try
+        {
+            for (var row = 0; row < grid; row++)
+            {
+                for (var column = 0; column < grid; column++)
+                {
+                    var x = (int)Math.Round(rect.X + (rect.Width - 1) * column / Math.Max(1.0, grid - 1));
+                    var y = (int)Math.Round(rect.Y + (rect.Height - 1) * row / Math.Max(1.0, grid - 1));
+                    var hit = WindowFromPoint(new NativePoint { X = x, Y = y });
+                    if (!IsDesktopShellPoint(hit))
+                    {
+                        continue;
+                    }
+
+                    pixels.Add(GetPixel(screenDc, x, y) & 0x00FFFFFF);
+                }
+            }
+        }
+        finally
+        {
+            _ = ReleaseDC(0, screenDc);
+        }
+
+        var nonBlack = pixels.Count(x => x != 0);
+        var averageLuma = pixels.Count == 0 ? 0 : pixels.Average(x =>
+            (((x & 0xFF) * 299) + (((x >> 8) & 0xFF) * 587) + (((x >> 16) & 0xFF) * 114)) / 1000.0);
+        return new(pixels.Count, nonBlack, averageLuma, $"shellBackgroundSamples={pixels.Count}", pixels);
+    }
+
+    private static bool IsDesktopShellPoint(nint hwnd)
+    {
+        for (var current = hwnd; current != 0; current = GetParent(current))
+        {
+            var className = new System.Text.StringBuilder(128);
+            _ = GetClassName(current, className, className.Capacity);
+            if (className.ToString() is "SysListView32" or "SHELLDLL_DefView" or "Progman" or "WorkerW")
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public static DesktopPixelSample Sample(RectD rect, int grid = 16)
     {
         var sampleCount = Math.Max(2, grid);
@@ -259,6 +312,18 @@ public static class DesktopPixelProbe
 
     [DllImport("gdi32.dll", SetLastError = true)]
     private static extern uint GetPixel(nint hdc, int x, int y);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativePoint { public int X; public int Y; }
+
+    [DllImport("user32.dll")]
+    private static extern nint WindowFromPoint(NativePoint point);
+
+    [DllImport("user32.dll")]
+    private static extern nint GetParent(nint hwnd);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetClassName(nint hwnd, System.Text.StringBuilder className, int maxCount);
 
     private const uint DibRgbColors = 0;
     private const uint BiRgb = 0;

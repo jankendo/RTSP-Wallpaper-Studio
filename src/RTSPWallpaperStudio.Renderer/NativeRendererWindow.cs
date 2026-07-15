@@ -29,7 +29,7 @@ internal sealed class NativeRendererWindow : IDisposable
         RegisterClass();
         var instance = RendererWin32.GetModuleHandle(null);
         Hwnd = RendererWin32.CreateWindowEx(
-            (int)(RendererWin32.WsExToolWindow | RendererWin32.WsExNoActivate),
+            (int)(RendererWin32.WsExToolWindow | RendererWin32.WsExNoActivate | RendererWin32.WsExLayered),
             ClassName,
             null,
             unchecked((int)(RendererWin32.WsPopup | RendererWin32.WsClipChildren | RendererWin32.WsClipSiblings)),
@@ -121,7 +121,11 @@ internal sealed class NativeRendererWindow : IDisposable
     {
         if (!_disposed && Hwnd != 0)
         {
-            _ = RendererWin32.InvalidateRect(Hwnd, 0, false);
+            // LibVLC display callbacks run on a decoder thread. Synchronous
+            // delivery guarantees that the native presentation happens before
+            // the callback is released, avoiding a queued first-frame freeze
+            // and naturally bounding decode/present drift.
+            _ = RendererWin32.SendMessage(Hwnd, RendererWin32.WmRenderTick, 1, 0);
         }
     }
 
@@ -129,7 +133,7 @@ internal sealed class NativeRendererWindow : IDisposable
     {
         EnsureNotDisposed();
         RendererWin32.ShowWindow(Hwnd, RendererWin32.SwShowNoActivate);
-        RendererWin32.UpdateWindow(Hwnd);
+        PresentLayeredFrame();
     }
 
     public void Hide()
@@ -230,7 +234,7 @@ internal sealed class NativeRendererWindow : IDisposable
         {
             if (message == RendererWin32.WmPaint)
             {
-                window.Paint();
+                window.ValidatePaintAndPresent();
                 return 0;
             }
 
@@ -241,7 +245,7 @@ internal sealed class NativeRendererWindow : IDisposable
 
             if (message == RendererWin32.WmRenderTick)
             {
-                window.InvalidateVideoFrameImmediately();
+                window.PresentLayeredFrameImmediately();
                 return 0;
             }
         }
@@ -260,31 +264,12 @@ internal sealed class NativeRendererWindow : IDisposable
         return RendererWin32.DefWindowProc(hwnd, message, wParam, lParam);
     }
 
-    private void Paint()
+    private void ValidatePaintAndPresent()
     {
-        Interlocked.Increment(ref _paintRequestCount);
         var hdc = RendererWin32.BeginPaint(Hwnd, out var paintStruct);
         try
         {
-            if (hdc == 0 || !RendererWin32.GetClientRect(Hwnd, out var clientRect))
-            {
-                return;
-            }
-
-            var width = clientRect.Right - clientRect.Left;
-            var height = clientRect.Bottom - clientRect.Top;
-            var result = _frameBuffer?.Paint(hdc, width, height) ??
-                         _testPattern?.Paint(hdc, width, height, Hwnd, Environment.ProcessId) ?? 0;
-            _lastPaintResult = result;
-            _lastPaintAt = DateTimeOffset.UtcNow;
-            if (result > 0)
-            {
-                Interlocked.Increment(ref _paintCount);
-                Interlocked.Increment(ref _presentedFrameCount);
-                _lastPresentedChecksum = _frameBuffer?.LastFrameChecksum ?? _testPattern?.LastChecksum ?? 0;
-                _lastPresentedAt = DateTimeOffset.UtcNow;
-                _firstPresentation.TrySetResult(GetPresentationMetrics());
-            }
+            if (hdc != 0) PresentLayeredFrame();
         }
         finally
         {
@@ -292,14 +277,44 @@ internal sealed class NativeRendererWindow : IDisposable
         }
     }
 
-    private void InvalidateVideoFrameImmediately()
+    private void PresentLayeredFrameImmediately()
     {
         if (!_disposed && Hwnd != 0)
         {
             Interlocked.Increment(ref _invalidationRequestCount);
-            _ = RendererWin32.InvalidateRect(Hwnd, 0, false);
-            _ = RendererWin32.UpdateWindow(Hwnd);
+            PresentLayeredFrame();
         }
+    }
+
+    private void PresentLayeredFrame()
+    {
+        Interlocked.Increment(ref _paintRequestCount);
+        byte[] pixels = [];
+        var width = 0;
+        var height = 0;
+        ulong checksum = 0;
+        var available = _frameBuffer?.TryCopyLatestFrame(out pixels, out width, out height, out checksum) == true;
+        if (!available && _testPattern?.TryCopyNextFrame(out pixels, out width, out height, out checksum) != true)
+        {
+            return;
+        }
+
+        var diagnosticText = _testPattern is null
+            ? string.Empty
+            : $"RTSP WALLPAPER TEST\nframe={_testPattern.FrameNumber}  pid={Environment.ProcessId}  hwnd=0x{Hwnd.ToInt64():X}";
+        var result = LayeredFramePresenter.Present(Hwnd, pixels, width, height, diagnosticText);
+        _lastPaintResult = result;
+        _lastPaintAt = DateTimeOffset.UtcNow;
+        if (result <= 0)
+        {
+            return;
+        }
+
+        Interlocked.Increment(ref _paintCount);
+        Interlocked.Increment(ref _presentedFrameCount);
+        _lastPresentedChecksum = checksum;
+        _lastPresentedAt = DateTimeOffset.UtcNow;
+        _firstPresentation.TrySetResult(GetPresentationMetrics());
     }
 
     private static TaskCompletionSource<RendererPresentationMetrics> CreatePresentationSource() =>

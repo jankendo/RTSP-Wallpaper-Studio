@@ -9,6 +9,8 @@ namespace RTSPWallpaperStudio.Interop;
 /// </summary>
 public sealed class DesktopHostDiscovery
 {
+    private readonly ProgmanBackgroundStrategy _progman = new();
+    private readonly ShellViewBackgroundStrategy _shellView = new();
     private readonly LegacyWorkerWStrategy _legacy = new();
     private readonly RaisedDesktopStrategy _raised = new();
 
@@ -28,37 +30,43 @@ public sealed class DesktopHostDiscovery
 
     public DesktopHostDiscoveryResult DiscoverExisting()
     {
+        var candidates = DiscoverCandidates();
+        return candidates.FirstOrDefault(x => x.Success) ?? Failure(
+            DesktopLayoutStrategy.Unknown, "DESKTOP_HOST_NOT_FOUND",
+            "アイコンを保持するShell構造と安全な壁紙ホストを判定できませんでした。", 0,
+            string.Join(" | ", candidates.Select(x => $"{x.Strategy}: {x.Diagnostic}")));
+    }
+
+    public IReadOnlyList<DesktopHostDiscoveryResult> DiscoverCandidates()
+    {
         var progman = NativeMethods.FindWindow("Progman", null);
         if (progman == 0)
         {
-            return Failure(DesktopLayoutStrategy.Unknown, "DESKTOP_PROGMAN_NOT_FOUND", "Progmanが見つかりません。", 0);
+            return [Failure(DesktopLayoutStrategy.Unknown, "DESKTOP_PROGMAN_NOT_FOUND", "Progmanが見つかりません。", 0)];
         }
 
-        // Prefer the real shell-owned WorkerW surface. On the current Windows 11
-        // shell the Progman child WorkerW (sibling of SHELLDLL_DefView) is the
-        // only route that keeps icons in front of the renderer. A top-level
-        // RaisedDesktop window can be visible while still covering the icon host.
+        var results = new List<DesktopHostDiscoveryResult>();
+
+        results.Add(WithCandidateDiagnostics(_raised.DiscoverExisting(progman)));
+
+        // Newer Windows 11 builds can draw the static wallpaper through a
+        // DirectComposition visual above a Progman-child WorkerW. In that
+        // layout, a child of SHELLDLL_DefView behind SysListView32 is the
+        // measurable background surface.
+        results.Add(WithCandidateDiagnostics(_shellView.DiscoverExisting(progman)));
+
+        results.Add(WithCandidateDiagnostics(_progman.DiscoverExisting(progman)));
+
+        // Retain the traditional shell-owned WorkerW as a compatibility
+        // candidate, but it is accepted only after composed-desktop pixels are
+        // measured by the renderer.
         var legacy = _legacy.DiscoverExisting(progman);
-        if (legacy.Success)
-        {
-            return WithCandidateDiagnostics(legacy);
-        }
+        results.Add(WithCandidateDiagnostics(legacy));
 
         // RaisedDesktop remains a compatibility candidate, but its shell
         // composition is validated after attach. It must never be accepted
         // solely because a non-black desktop pixel was observed.
-        var raised = _raised.DiscoverExisting(progman);
-        if (raised.Success)
-        {
-            return WithCandidateDiagnostics(raised);
-        }
-
-        return WithCandidateDiagnostics(Failure(
-            DesktopLayoutStrategy.Unknown,
-            "DESKTOP_HOST_NOT_FOUND",
-            "アイコンを保持するShell構造と安全な壁紙ホストを判定できませんでした。",
-            Math.Max(raised.LastError, legacy.LastError),
-            $"RaisedDesktop: {raised.Diagnostic}; LegacyWorkerW: {legacy.Diagnostic}"));
+        return results;
     }
 
     internal static nint FindShellView(nint progman, out nint iconHost)

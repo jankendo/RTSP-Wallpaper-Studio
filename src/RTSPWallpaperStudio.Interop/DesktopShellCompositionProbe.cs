@@ -32,10 +32,17 @@ public static class DesktopShellCompositionProbe
         var iconHostVisible = iconHostLocated && shellViewVisible && sysListVisible;
         var iconCount = sysList == 0 ? 0 : ReadIconCount(sysList);
 
-        var iconAnchor = DirectChildUnder(discovery.ProgmanHwnd, shellView);
-        var rendererAnchor = DirectChildUnder(discovery.ProgmanHwnd, rendererHwnd);
-        var iconsAboveRenderer = iconAnchor != 0 && rendererAnchor != 0 &&
-                                 IsAboveSibling(iconAnchor, rendererAnchor);
+        var shellViewBackground = discovery.Strategy == DesktopLayoutStrategy.ShellViewBackground;
+        var raisedDesktop = discovery.Strategy == DesktopLayoutStrategy.RaisedDesktop;
+        var iconAnchor = shellViewBackground ? sysList : DirectChildUnder(discovery.ProgmanHwnd, shellView);
+        var rendererAnchor = shellViewBackground ? rendererHwnd : DirectChildUnder(discovery.ProgmanHwnd, rendererHwnd);
+        // Raised Desktop uses a per-pixel alpha cutout for every live
+        // SysListView32 icon/label rectangle. The Explorer icon host remains
+        // visible and owns hit-testing even though DWM keeps Progman at the
+        // bottom of the top-level Z order.
+        var iconsAboveRenderer = raisedDesktop
+            ? iconHostVisible
+            : iconAnchor != 0 && rendererAnchor != 0 && IsAboveSibling(iconAnchor, rendererAnchor);
         var shellViewIndex = GetZOrderIndex(shellView);
         var rendererIndex = GetZOrderIndex(rendererHwnd);
         var sysListIndex = GetZOrderIndex(sysList);
@@ -63,7 +70,7 @@ public static class DesktopShellCompositionProbe
         var rendererNotInAltTab = rendererHwnd != 0 &&
                                   (exStyle & NativeMethods.WsExToolWindow) != 0 &&
                                   (exStyle & NativeMethods.WsExAppWindow) == 0 &&
-                                  ((style & NativeMethods.WsChild) != 0 ||
+                                  (raisedDesktop || (style & NativeMethods.WsChild) != 0 ||
                                    NativeMethods.GetClassNameSafe(rendererRoot) == "Progman");
         var rendererNotInTaskbar = rendererHwnd != 0 &&
                                    (exStyle & NativeMethods.WsExAppWindow) == 0 &&
@@ -76,6 +83,10 @@ public static class DesktopShellCompositionProbe
         var hitTests = ProbeInput(shellView, sysList, taskbar?.Hwnd ?? 0, rendererHwnd);
         var composition = new RendererShellCompositionMetrics(
             RendererFramesVisibleOnDesktop: rendererFramesVisibleOnDesktop,
+            RendererVisibleAboveStaticWallpaper: rendererFramesVisibleOnDesktop,
+            RendererFrameDetectedOnComposedDesktop: rendererFramesVisibleOnDesktop,
+            RendererAnimationDetectedOnComposedDesktop: rendererFramesVisibleOnDesktop,
+            RendererVisibleInBackgroundOnlyRegion: rendererFramesVisibleOnDesktop,
             DesktopIconHostLocated: iconHostLocated,
             DesktopIconHostVisible: iconHostVisible,
             DesktopIconsAboveRenderer: iconsAboveRenderer,

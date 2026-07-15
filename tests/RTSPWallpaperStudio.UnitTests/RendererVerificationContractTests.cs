@@ -50,6 +50,10 @@ public sealed class RendererVerificationContractTests
     {
         var verified = new RendererShellCompositionMetrics(
             RendererFramesVisibleOnDesktop: true,
+            RendererVisibleAboveStaticWallpaper: true,
+            RendererFrameDetectedOnComposedDesktop: true,
+            RendererAnimationDetectedOnComposedDesktop: true,
+            RendererVisibleInBackgroundOnlyRegion: true,
             DesktopIconHostLocated: true,
             DesktopIconHostVisible: true,
             DesktopIconsAboveRenderer: true,
@@ -62,6 +66,9 @@ public sealed class RendererVerificationContractTests
             DesktopInputAvailable: true);
 
         Assert.True(RendererShellCompositionContract.IsVerified(verified));
+        Assert.False(RendererShellCompositionContract.IsVerified(verified with { RendererVisibleAboveStaticWallpaper = false }));
+        Assert.False(RendererShellCompositionContract.IsVerified(verified with { RendererAnimationDetectedOnComposedDesktop = false }));
+        Assert.False(RendererShellCompositionContract.IsVerified(verified with { RendererVisibleInBackgroundOnlyRegion = false }));
         Assert.False(RendererShellCompositionContract.IsVerified(verified with { DesktopIconsAboveRenderer = false }));
         Assert.False(RendererShellCompositionContract.IsVerified(verified with { TaskbarAboveRenderer = false }));
         Assert.False(RendererShellCompositionContract.IsVerified(verified with { DesktopInputAvailable = false }));

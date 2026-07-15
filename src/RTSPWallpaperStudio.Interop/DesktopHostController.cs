@@ -27,6 +27,18 @@ public sealed class DesktopHostController
 
     public DesktopHostDiscoveryResult DiscoverExisting() => _lastDiscovery ?? _discovery.DiscoverExisting();
 
+    public IReadOnlyList<DesktopHostDiscoveryResult> DiscoverCandidatesForApply()
+    {
+        var candidates = _discovery.DiscoverCandidates();
+        if (candidates.All(x => !x.Success))
+        {
+            _discovery.EnsureDesktopHostCreated();
+            candidates = _discovery.DiscoverCandidates();
+        }
+
+        return candidates.Where(x => x.Success).ToArray();
+    }
+
     public DesktopAttachResult Attach(nint rendererHwnd, MonitorInfo monitor, DesktopHostDiscoveryResult? discovered = null)
     {
         var discovery = discovered ?? DiscoverForApply();

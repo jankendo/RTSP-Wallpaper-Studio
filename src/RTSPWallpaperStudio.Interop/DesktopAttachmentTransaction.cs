@@ -38,6 +38,8 @@ public sealed class DesktopAttachmentTransaction
         try
         {
             var raisedDesktop = _discovery.Strategy == DesktopLayoutStrategy.RaisedDesktop;
+            var shellViewBackground = _discovery.Strategy == DesktopLayoutStrategy.ShellViewBackground;
+            var progmanBackground = _discovery.Strategy == DesktopLayoutStrategy.ProgmanBackground;
             var style = NativeMethods.GetWindowLongPtr(rendererHwnd, NativeMethods.GwlStyle).ToInt64();
             var newStyle = raisedDesktop
                 ? (style | NativeMethods.WsPopup | NativeMethods.WsClipChildren | NativeMethods.WsClipSiblings) & ~NativeMethods.WsChild
@@ -99,9 +101,13 @@ public sealed class DesktopAttachmentTransaction
             }
             trace.Add($"event=CoordinateMapped; localX={localTopLeft.X}; localY={localTopLeft.Y}; mode={(raisedDesktop ? "screen" : "parent")}");
 
-            var insertAfter = raisedDesktop ? NativeMethods.HwndBottom : 0;
+            var insertAfter = raisedDesktop
+                ? _discovery.ProgmanHwnd
+                : shellViewBackground || progmanBackground
+                    ? _discovery.IconHostHwnd
+                    : 0;
             var positionFlags = NativeMethods.SetWindowPosNoActivate | NativeMethods.SetWindowPosFrameChanged | NativeMethods.SetWindowPosNoSendChanging;
-            if (!raisedDesktop)
+            if (!raisedDesktop && !shellViewBackground && !progmanBackground)
             {
                 positionFlags |= NativeMethods.SetWindowPosNoZOrder | NativeMethods.SetWindowPosNoOwnerZOrder;
             }
@@ -112,7 +118,7 @@ public sealed class DesktopAttachmentTransaction
                 return FailAndRollback(rendererHwnd, snapshot, RendererErrorCodes.WallpaperRectValidationFailed,
                     "壁紙ウィンドウの配置に失敗しました。", $"{string.Join(';', trace)}; event=RendererBoundsApplyFailed; SetWindowPos Win32={Marshal.GetLastWin32Error()}");
             }
-            trace.Add($"event=RendererBoundsApplied; screen={_monitor.Bounds}; zorder={(raisedDesktop ? "HWND_BOTTOM" : "host-child")}");
+            trace.Add($"event=RendererBoundsApplied; screen={_monitor.Bounds}; zorder={(raisedDesktop ? $"immediately-behind-Progman-0x{_discovery.ProgmanHwnd.ToInt64():X}" : shellViewBackground ? $"behind-SysListView32-0x{insertAfter.ToInt64():X}" : progmanBackground ? $"behind-ShellView-0x{insertAfter.ToInt64():X}" : "host-child")}");
 
             var validationOk = DesktopAttachmentValidator.Validate(rendererHwnd, _discovery, out var validationDiagnostic);
             var rectOk = DesktopAttachmentValidator.ValidateRect(rendererHwnd, _monitor.Bounds, out var rectDiagnostic);

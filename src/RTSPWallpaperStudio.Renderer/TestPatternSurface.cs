@@ -73,6 +73,24 @@ internal sealed class TestPatternSurface : IDisposable
         }
     }
 
+    public bool TryCopyNextFrame(out byte[] pixels, out int width, out int height, out ulong checksum)
+    {
+        pixels = [];
+        width = Width;
+        height = Height;
+        checksum = 0;
+        if (_disposed)
+        {
+            return false;
+        }
+
+        var frame = Interlocked.Increment(ref _frameNumber);
+        Render(frame);
+        pixels = (byte[])_pixels.Clone();
+        checksum = _lastChecksum;
+        return true;
+    }
+
     public void Dispose()
     {
         _disposed = true;

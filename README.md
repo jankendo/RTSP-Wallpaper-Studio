@@ -1,15 +1,16 @@
 # RTSP Wallpaper Studio
 
-RTSP映像を、Windowsデスクトップアイコンの背面にあるWorkerWへネイティブ動画ウィンドウとして配置する、Windows 10/11 x64向けのライブ壁紙アプリです。
+RTSP映像をWindows Shellのデスクトップ合成層へ配置し、デスクトップアイコンとタスクバーを維持するWindows 10/11 x64向けのライブ壁紙アプリです。
 
-> 現在は公開開発版です。純Win32 Renderer、First Frame Gate、WorkerW/Shell合成検証、双方向IPC、安全停止と診断GUIを実装しています。実機カメラでの長時間再生、Explorer再起動、マルチモニター抜き差し、MSIX署名は未検証です。
+> 現在は公開開発版です。純Win32 Renderer、First Frame Gate、WorkerW/Raised Desktop/Shell合成検証、双方向IPC、安全停止と診断GUIを実装しています。実機RTSPの連続デコード・描画検証は実施済みです。Explorer再起動、マルチモニター抜き差し、MSIX署名は継続検証項目です。
 
 ## 主な機能
 
 - WPF製の日本語GUI
 - `rtsp://` / `rtsps://` URLの検証と資格情報分離
 - LibVLCSharpによるRenderer別プロセス再生
-- WorkerW / Raised Desktopへの壁紙ウィンドウ配置（実親・スタイル・矩形・Z順の検証付き）
+- WorkerW / ShellView / Raised Desktop候補の探索と、実親・スタイル・矩形・Z順・合成画素による検証
+- Windows 11 Raised Desktopでは、Explorerから取得したアイコン・ラベル矩形をレイヤード描画から除外してアイコン表示と入力を維持
 - デスクトップアイコン・タスクバー・入力・フォーカス・Alt+Tabを含むWindows Shell合成検証
 - H.265/HEVC向けLibVLC vmem + CPUフレームコールバック描画（D3D11 voutのデッドロック回避）
 - Appが先に作る現在ユーザー限定の双方向Named Pipe IPC
@@ -69,7 +70,7 @@ dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.D
 ```
 
 `--wallpaper` を付けると、接続テスト成功後にRendererを起動し、`WallpaperVisible`イベントを受信してから停止します。`--hold-seconds` を併用すると指定秒数だけ表示を維持し、長時間再生・フリーズ監視を検証できます。`--start-go2rtc` は `C:\go2rtc\go2rtc.exe` を診断プロセスの所有下で起動し、検証終了時にそれだけを停止します。`--ipc-smoke` はRTSP接続を省略してRendererのNamed Pipe接続、Ready/Heartbeat/停止イベントだけを検証します。GUIを使わないため、CI・障害再現・ログ採取に利用できます。
-`--wallpaper-only` は接続テストを省略し、アプリの「壁紙に設定」操作と同じRenderer直接起動を検証します。`--desktop-probe` は表示HWNDの親・owner・class・style・矩形・可視状態を確認し、実デスクトップDCの非黒サンプルと1秒差分から動画の動きを確認します。既にGUIから表示中のHWNDを検証する場合は、ログ／診断画面のHWNDを使って次を実行できます。
+`--wallpaper-only` は接続テストを省略し、アプリの「壁紙に設定」操作と同じRenderer直接起動を検証します。`--desktop-probe` は表示HWNDの親・owner・class・style・矩形・可視状態を確認し、実デスクトップDC、背景専用サンプル、提示フレーム進行を組み合わせて動画の動きを確認します。成功条件にはアイコンホスト、タスクバー、入力、フォーカス、Alt+Tab安全性も含まれます。既にGUIから表示中のHWNDを検証する場合は、ログ／診断画面のHWNDを使って次を実行できます。
 
 `--shell-probe --shell-probe-output artifacts\qa\shell-hierarchy-before.json` は、ExplorerのProgman、WorkerW、SHELLDLL_DefView、SysListView32、Shell_TrayWnd、Shell_SecondaryTrayWndを変更なしで列挙し、親・owner・root・スタイル・矩形・モニター・前後兄弟・Z順をJSON保存します。壁紙の成功条件は`WallpaperShellCompositionVerified`の後に`WallpaperEndToEndVerified`が発行されることです。
 
@@ -123,7 +124,8 @@ MSIXは `installer\msix\build-msix.ps1` を使います。開発用自己署名�
 ## 既知の制約
 
 - Windowsには動画壁紙用の安定した公開APIがなく、WorkerWは非公開Shell挙動に依存します。Windows大型更新で修正が必要になる可能性があります。
-- 実機RTSP映像、Explorer再起動後の10秒以内復旧、画面ロック/スリープ、モニター抜き差しの実機QAは未実施です。
+- `rtsp://127.0.0.1:8554/switchbot3mp` の実機RTSPは30秒連続検証済みです。Explorer再起動後の10秒以内復旧、画面ロック/スリープ、モニター抜き差しは継続QA項目です。
+- Raised Desktopのアイコン保護はExplorerの現在のアイコン矩形へ追従します。アイコンを極端に密集させた場合、ラベル周辺で標準壁紙が薄く透過して見えることがあります。
 - GUIの現在版は1プロファイル・1 Rendererを中心とした基本フローです。複数Rendererによる複製・スパンの実行制御、MSIX自動更新、診断ZIPは今後の拡張対象です。
 - DRM保護映像、RTSPサーバーの接続数制限、GPUドライバー依存のハードウェアデコードは対象環境の制約を受けます。
 - 本プロジェクトは商用配布前のライセンス確認を代替しません。LibVLC/LibVLCSharpの配布条件を確認してください。

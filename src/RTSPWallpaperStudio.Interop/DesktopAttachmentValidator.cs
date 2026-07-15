@@ -22,6 +22,8 @@ public static class DesktopAttachmentValidator
 
         var actualParent = NativeMethods.GetParent(rendererHwnd);
         var raisedDesktop = discovery.Strategy == DesktopLayoutStrategy.RaisedDesktop;
+        var shellViewBackground = discovery.Strategy == DesktopLayoutStrategy.ShellViewBackground;
+        var progmanBackground = discovery.Strategy == DesktopLayoutStrategy.ProgmanBackground;
         var expectedParent = raisedDesktop ? NativeMethods.HwndDesktop : discovery.HostHwnd;
         if (actualParent != expectedParent)
         {
@@ -55,7 +57,7 @@ public static class DesktopAttachmentValidator
         }
 
         var parentClass = NativeMethods.GetClassNameSafe(actualParent);
-        if (!raisedDesktop &&
+        if (!raisedDesktop && !shellViewBackground && !progmanBackground &&
             (!parentClass.Equals("WorkerW", StringComparison.Ordinal) ||
              NativeMethods.GetParent(actualParent) != discovery.ProgmanHwnd ||
              !NativeMethods.IsWindowVisible(actualParent)))
@@ -63,11 +65,43 @@ public static class DesktopAttachmentValidator
             diagnostic = $"Legacy WorkerWの親契約が不正です。parent=0x{actualParent.ToInt64():X}; class={parentClass}; progman=0x{discovery.ProgmanHwnd.ToInt64():X}";
             return false;
         }
-        if (DesktopHostDiscovery.IsForbiddenHost(actualParent) ||
-            parentClass.Equals("SHELLDLL_DefView", StringComparison.Ordinal) ||
+        if (shellViewBackground &&
+            (!parentClass.Equals("SHELLDLL_DefView", StringComparison.Ordinal) ||
+             actualParent != discovery.ShellViewHwnd ||
+             NativeMethods.GetParent(actualParent) != discovery.ProgmanHwnd ||
+             NativeMethods.GetParent(discovery.IconHostHwnd) != actualParent ||
+             !NativeMethods.IsWindowVisible(actualParent) ||
+             !NativeMethods.IsWindowVisible(discovery.IconHostHwnd)))
+        {
+            diagnostic = $"ShellView背景契約が不正です。parent=0x{actualParent.ToInt64():X}; shellView=0x{discovery.ShellViewHwnd.ToInt64():X}; sysList=0x{discovery.IconHostHwnd.ToInt64():X}";
+            return false;
+        }
+
+        if (progmanBackground)
+        {
+            var wallpaperWorker = NativeMethods.FindWindowEx(discovery.ProgmanHwnd, 0, "WorkerW", null);
+            if (actualParent != discovery.ProgmanHwnd ||
+                !parentClass.Equals("Progman", StringComparison.Ordinal) ||
+                wallpaperWorker == 0 ||
+                !IsAboveSibling(discovery.ShellViewHwnd, rendererHwnd) ||
+                !IsAboveSibling(rendererHwnd, wallpaperWorker))
+            {
+                diagnostic = $"Progman背景Z順が不正です。shellView=0x{discovery.ShellViewHwnd.ToInt64():X}; renderer=0x{rendererHwnd.ToInt64():X}; worker=0x{wallpaperWorker.ToInt64():X}";
+                return false;
+            }
+        }
+
+        if ((!shellViewBackground && DesktopHostDiscovery.IsForbiddenHost(actualParent)) ||
+            (!shellViewBackground && parentClass.Equals("SHELLDLL_DefView", StringComparison.Ordinal)) ||
             parentClass.Equals("SysListView32", StringComparison.Ordinal))
         {
             diagnostic = $"禁止されたShellウィンドウへ親子付けされています。class={parentClass}";
+            return false;
+        }
+
+        if (shellViewBackground && !IsAboveSibling(discovery.IconHostHwnd, rendererHwnd))
+        {
+            diagnostic = "SysListView32がRendererより前面にありません。";
             return false;
         }
 
@@ -80,6 +114,27 @@ public static class DesktopAttachmentValidator
         }
 
         return true;
+    }
+
+    private static bool IsAboveSibling(nint upper, nint lower)
+    {
+        if (upper == 0 || lower == 0 || NativeMethods.GetParent(upper) != NativeMethods.GetParent(lower))
+        {
+            return false;
+        }
+
+        var current = upper;
+        for (var guard = 0; current != 0 && guard < 10000; guard++)
+        {
+            if (current == lower)
+            {
+                return true;
+            }
+
+            current = NativeMethods.GetWindow(current, NativeMethods.GwHwndNext);
+        }
+
+        return false;
     }
 
     public static bool ValidateRect(nint rendererHwnd, RectD monitor, out string diagnostic)

@@ -18,7 +18,7 @@ internal static class Program
         var options = Parse(args);
         if (options.ShowHelp)
         {
-            Console.WriteLine("Usage: RTSPWallpaperStudio.Diagnostics.exe --url <rtsp-url> [--transport tcp|udp|automatic] [--timeout 10] [--cache 300] [--start-go2rtc] [--wallpaper|--wallpaper-only] [--render-test-pattern] [--desktop-probe] [--hold-seconds 30] [--ipc-smoke]");
+            Console.WriteLine("Usage: RTSPWallpaperStudio.Diagnostics.exe --url <rtsp-url> [--transport tcp|udp|automatic] [--timeout 10] [--cache 300] [--start-go2rtc] [--wallpaper|--wallpaper-only] [--render-test-pattern] [--monitor-index 0] [--desktop-probe] [--hold-seconds 30] [--ipc-smoke]");
             Console.WriteLine("       RTSPWallpaperStudio.Diagnostics.exe --probe-hwnd <hex-or-decimal-hwnd> [--probe-seconds 1]");
             Console.WriteLine("       RTSPWallpaperStudio.Diagnostics.exe --shell-probe [--shell-probe-output <path>]");
             Console.WriteLine("       RTSPWallpaperStudio.Diagnostics.exe --startup-status");
@@ -96,7 +96,7 @@ internal static class Program
         await using var rendererManager = new RendererProcessManager(loggerFactory.CreateLogger<RendererProcessManager>());
         try
         {
-            var monitor = new DesktopMonitorProvider().GetMonitors().FirstOrDefault();
+            var monitor = SelectMonitor(options);
             if (monitor is null)
             {
                 Console.Error.WriteLine("No monitor was found.");
@@ -183,6 +183,7 @@ internal static class Program
         string? shellProbeOutput = null;
         var probeSeconds = 1;
         var holdSeconds = 0;
+        var monitorIndex = 0;
         string? startupAction = null;
         string? startupExecutable = null;
         var help = false;
@@ -213,6 +214,7 @@ internal static class Program
                     break;
                 case "--probe-seconds": probeSeconds = Math.Clamp(int.Parse(args[++i], CultureInfo.InvariantCulture), 1, 60); break;
                 case "--hold-seconds": holdSeconds = Math.Clamp(int.Parse(args[++i], CultureInfo.InvariantCulture), 0, 3600); break;
+                case "--monitor-index": monitorIndex = Math.Max(0, int.Parse(args[++i], CultureInfo.InvariantCulture)); break;
                 case "--startup-status": startupAction = "status"; break;
                 case "--startup-enable": startupAction = "enable"; break;
                 case "--startup-disable": startupAction = "disable"; break;
@@ -225,7 +227,7 @@ internal static class Program
         }
 
         return new DiagnosticOptions(url, user, password, transport, timeout, cache, hardware, startGo2Rtc, renderTestPattern, wallpaper, wallpaperOnly, ipcSmoke,
-            desktopProbe, probeHwnd, probeSeconds, holdSeconds, startupAction, startupExecutable, createDiagnosticsPackage, shellProbe, shellProbeOutput, help);
+            desktopProbe, probeHwnd, probeSeconds, holdSeconds, monitorIndex, startupAction, startupExecutable, createDiagnosticsPackage, shellProbe, shellProbeOutput, help);
     }
 
     private static int RunStartupCommand(DiagnosticOptions options)
@@ -346,7 +348,7 @@ internal static class Program
         await using var rendererManager = new RendererProcessManager(loggerFactory.CreateLogger<RendererProcessManager>());
         try
         {
-            var monitor = new DesktopMonitorProvider().GetMonitors().FirstOrDefault();
+            var monitor = SelectMonitor(options);
             if (monitor is null)
             {
                 Console.Error.WriteLine("WALLPAPER_RESULT=FAILED code=NO_MONITOR");
@@ -417,7 +419,7 @@ internal static class Program
         await using var rendererManager = new RendererProcessManager(loggerFactory.CreateLogger<RendererProcessManager>());
         try
         {
-            var monitor = new DesktopMonitorProvider().GetMonitors().FirstOrDefault();
+            var monitor = SelectMonitor(options);
             if (monitor is null)
             {
                 Console.Error.WriteLine("IPC_SMOKE=FAILED code=NO_MONITOR");
@@ -459,6 +461,9 @@ internal static class Program
 
     private sealed record DiagnosticOptions(string Url, string? UserName, string? Password, TransportMode Transport,
         int TimeoutSeconds, int CacheMs, HardwareDecodeMode HardwareDecode, bool StartGo2Rtc, bool RenderTestPattern, bool Wallpaper, bool WallpaperOnly, bool IpcSmoke,
-        bool DesktopProbe, nint? ProbeHwnd, int ProbeSeconds, int HoldSeconds, string? StartupAction, string? StartupExecutable, bool CreateDiagnosticsPackage,
+        bool DesktopProbe, nint? ProbeHwnd, int ProbeSeconds, int HoldSeconds, int MonitorIndex, string? StartupAction, string? StartupExecutable, bool CreateDiagnosticsPackage,
         bool ShellProbe, string? ShellProbeOutput, bool ShowHelp);
+
+    private static MonitorInfo? SelectMonitor(DiagnosticOptions options) =>
+        new DesktopMonitorProvider().GetMonitors().ElementAtOrDefault(options.MonitorIndex);
 }

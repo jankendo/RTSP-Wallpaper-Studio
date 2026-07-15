@@ -19,6 +19,7 @@ internal static class RendererWin32
     internal const long WsClipSiblings = 0x04000000L;
     internal const long WsExToolWindow = 0x00000080L;
     internal const long WsExNoActivate = 0x08000000L;
+    internal const long WsExLayered = 0x00080000L;
     internal const uint WmDestroy = 0x0002;
     internal const uint WmClose = 0x0010;
     internal const uint WmEraseBkgnd = 0x0014;
@@ -30,6 +31,9 @@ internal static class RendererWin32
     internal const uint SrcCopy = 0x00CC0020;
     internal const uint BiRgb = 0;
     internal const int Transparent = 1;
+    internal const byte AcSrcOver = 0;
+    internal const byte AcSrcAlpha = 1;
+    internal const uint UlwAlpha = 0x00000002;
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     internal struct WndClassEx
@@ -111,6 +115,22 @@ internal static class RendererWin32
         public int Y;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct Size
+    {
+        public int Width;
+        public int Height;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    internal struct BlendFunction
+    {
+        public byte BlendOp;
+        public byte BlendFlags;
+        public byte SourceConstantAlpha;
+        public byte AlphaFormat;
+    }
+
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     internal delegate nint WndProcDelegate(nint hwnd, uint message, nuint wParam, nint lParam);
 
@@ -180,6 +200,10 @@ internal static class RendererWin32
     internal static extern bool GetClientRect(nint hwnd, out Rect rect);
 
     [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool GetWindowRect(nint hwnd, out Rect rect);
+
+    [DllImport("user32.dll", SetLastError = true)]
     internal static extern nint InvalidateRect(nint hwnd, nint rect, [MarshalAs(UnmanagedType.Bool)] bool erase);
 
     [DllImport("user32.dll", SetLastError = true)]
@@ -193,6 +217,29 @@ internal static class RendererWin32
     internal static extern int StretchDIBits(nint hdc, int xDest, int yDest, int destWidth, int destHeight,
         int xSrc, int ySrc, int srcWidth, int srcHeight, nint bits, ref BitmapInfo bitmapInfo,
         uint usage, uint rasterOperation);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool UpdateLayeredWindow(nint hwnd, nint destinationDc, nint destinationPoint,
+        ref Size size, nint sourceDc, ref Point sourcePoint, uint colorKey,
+        ref BlendFunction blend, uint flags);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern nint GetDC(nint hwnd);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern int ReleaseDC(nint hwnd, nint hdc);
+
+    [DllImport("gdi32.dll", SetLastError = true)]
+    internal static extern nint CreateCompatibleDC(nint hdc);
+
+    [DllImport("gdi32.dll", EntryPoint = "DeleteDC", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool DeleteDC(nint hdc);
+
+    [DllImport("gdi32.dll", EntryPoint = "CreateDIBSection", SetLastError = true)]
+    internal static extern nint CreateDIBSection(nint hdc, ref BitmapInfo bitmapInfo, uint usage,
+        out nint bits, nint section, uint offset);
 
     [DllImport("gdi32.dll", SetLastError = true)]
     internal static extern nint CreateSolidBrush(uint color);

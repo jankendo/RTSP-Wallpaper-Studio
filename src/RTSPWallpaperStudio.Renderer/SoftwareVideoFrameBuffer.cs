@@ -135,6 +135,28 @@ internal sealed class SoftwareVideoFrameBuffer : IDisposable
         }
     }
 
+    public bool TryCopyLatestFrame(out byte[] pixels, out int width, out int height, out ulong checksum)
+    {
+        lock (_gate)
+        {
+            pixels = [];
+            width = _width;
+            height = _height;
+            checksum = _lastFrameChecksum;
+            if (_latestFrame.Length == 0 || width <= 0 || height <= 0)
+            {
+                return false;
+            }
+
+            pixels = (byte[])_latestFrame.Clone();
+            for (var i = 3; i < pixels.Length; i += 4)
+            {
+                pixels[i] = byte.MaxValue;
+            }
+            return true;
+        }
+    }
+
     public void Dispose()
     {
         lock (_gate)
@@ -209,8 +231,12 @@ internal sealed class SoftwareVideoFrameBuffer : IDisposable
                 _lastFrameChecksum = ComputeChecksum(_latestFrame);
             }
 
-            _frameDisplayed();
+            // Queue the native presentation before observers/reporting. A
+            // progress observer must never be able to prevent the decoded
+            // frame from reaching the HWND (the original ordering produced a
+            // first-frame freeze while decode counters continued advancing).
             _invalidateWindow();
+            _frameDisplayed();
         }
         catch (Exception ex)
         {

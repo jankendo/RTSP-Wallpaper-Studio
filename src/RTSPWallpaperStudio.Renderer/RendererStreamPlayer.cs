@@ -138,9 +138,12 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
 
         var rect = _lastMonitor?.Bounds ?? new RectD();
         var first = DesktopPixelProbe.Sample(rect);
+        var backgroundFirst = DesktopPixelProbe.SampleShellBackground(rect);
         await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
         var second = DesktopPixelProbe.Sample(rect);
+        var backgroundSecond = DesktopPixelProbe.SampleShellBackground(rect);
         var diff = DesktopPixelProbe.Compare(first, second);
+        var backgroundDiff = DesktopPixelProbe.Compare(backgroundFirst, backgroundSecond);
         var marker = testPattern ? DesktopPixelProbe.ProbeTestPatternMarkers(rect) : null;
         // A child HWND can be clipped by the Shell host when sampled through
         // GetDC(hwnd), so this marker is evidence only. The final decision is
@@ -158,16 +161,34 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
         // Shell. Own-window pixels plus the WorkerW/Shell z-order contract are
         // the authoritative evidence in that case; the desktop sample remains
         // an independent diagnostic signal.
-        var shellFrameEvidence = desktopPixels || ownWindowPixels;
+        var backgroundAnimation = Math.Min(backgroundFirst.SampleCount, backgroundSecond.SampleCount) >= 4 &&
+                                  backgroundDiff.HasMovement;
+        var raisedDesktopEvidence = discovery.Strategy == DesktopLayoutStrategy.RaisedDesktop &&
+                                    desktopPixels && presentationProgressed && (!testPattern || animation);
+        var composedFrameEvidence = testPattern
+            ? marker?.Detected == true && animation || backgroundAnimation || raisedDesktopEvidence
+            : backgroundAnimation || raisedDesktopEvidence;
         await ReportAsync(RendererEventType.ShellCompositionValidationStarted,
             userMessage: "Windows Shellのアイコン、タスクバー、入力、フォーカスを検証しています。",
-            technicalDetails: $"rendererPixels={desktopPixels}; renderer=0x{_window.Hwnd.ToInt64():X}",
+            technicalDetails: $"composedFrame={composedFrameEvidence}; desktopPixels={desktopPixels}; animation={animation}; renderer=0x{_window.Hwnd.ToInt64():X}",
             metrics: BuildMetrics(discovery));
-        var shellProbe = DesktopShellCompositionProbe.Capture(discovery, _window.Hwnd, shellFrameEvidence);
-        _lastShellComposition = shellProbe.Metrics;
-        var shell = shellProbe.Metrics;
+        var shellProbe = DesktopShellCompositionProbe.Capture(discovery, _window.Hwnd, composedFrameEvidence);
+        var shell = shellProbe.Metrics with
+        {
+            RendererFramesVisibleOnDesktop = composedFrameEvidence,
+            RendererVisibleAboveStaticWallpaper = composedFrameEvidence,
+            RendererFrameDetectedOnComposedDesktop = composedFrameEvidence,
+            RendererAnimationDetectedOnComposedDesktop = backgroundAnimation || animation ||
+                                                          (!testPattern && presentationProgressed),
+            RendererVisibleInBackgroundOnlyRegion = backgroundAnimation || raisedDesktopEvidence,
+            BackgroundSampleCount = Math.Min(backgroundFirst.SampleCount, backgroundSecond.SampleCount),
+            AnimationChangedSamples = backgroundDiff.ChangedSamples,
+            DetectedTestPatternMarkers = marker?.MatchedMarkers ?? 0
+        };
+        shell = shell with { IsCompositionVerified = RendererShellCompositionContract.IsVerified(shell) };
+        _lastShellComposition = shell;
         var iconsRemainVisible = shell.DesktopIconHostVisible;
-        var verified = IsAttached && ownWindowPixels && shell.IsCompositionVerified &&
+        var verified = IsAttached && ownWindowPixels && composedFrameEvidence && shell.IsCompositionVerified &&
                        (!testPattern ? presentationProgressed : patternProgressed);
 
         var enrichedPresentation = latestPresentation with
@@ -181,10 +202,10 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
         { Presentation = enrichedPresentation };
         await ReportAsync(RendererEventType.RendererPixelsDetectedOnDesktop,
             userMessage: desktopPixels ? "実デスクトップDC上のRenderer領域に画素を検出しました。" : "実デスクトップDC上にRenderer画素を検出できませんでした。",
-            technicalDetails: JsonSerializer.Serialize(new { first, second, marker, ownMarker, patternProgressed }), metrics: metrics);
+            technicalDetails: JsonSerializer.Serialize(new { first, second, backgroundFirst, backgroundSecond, marker, ownMarker, patternProgressed }), metrics: metrics);
         await ReportAsync(RendererEventType.RendererAnimationDetectedOnDesktop,
             userMessage: animation ? "実デスクトップ上の連続サンプルに変化を検出しました。" : "実デスクトップ上の連続サンプルに変化を検出できませんでした。",
-            technicalDetails: JsonSerializer.Serialize(new { diff }), metrics: metrics);
+            technicalDetails: JsonSerializer.Serialize(new { diff, backgroundDiff, backgroundAnimation }), metrics: metrics);
         await ReportAsync(RendererEventType.DesktopIconsRemainVisible,
             userMessage: iconsRemainVisible ? "Shellのアイコンホストを確認しました。" : "Shellのアイコンホストを確認できませんでした。",
             technicalDetails: shell.Diagnostic,
@@ -244,7 +265,7 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
                 shell.IsCompositionVerified
                     ? "壁紙の実描画を最後まで検証できなかったため、成功扱いにしません。"
                     : GetShellCompositionFailureMessage(shell),
-                JsonSerializer.Serialize(new { ownWindowPixels, desktopPixels, shellFrameEvidence, animation, marker, ownMarker, patternProgressed, presentationProgressed, iconsRemainVisible, shell, presentation, latestPresentation }),
+                JsonSerializer.Serialize(new { ownWindowPixels, desktopPixels, composedFrameEvidence, animation, marker, ownMarker, patternProgressed, presentationProgressed, iconsRemainVisible, shell, presentation, latestPresentation }),
                 cancellationToken);
         }
 

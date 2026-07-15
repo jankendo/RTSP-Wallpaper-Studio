@@ -172,6 +172,8 @@ public sealed record RendererStatusMessage(
 public enum DesktopLayoutStrategy
 {
     Unknown,
+    ProgmanBackground,
+    ShellViewBackground,
     LegacyWorkerW,
     RaisedDesktop
 }
@@ -225,7 +227,24 @@ public enum RendererEventType
     RendererFocusOwnershipChecked,
     DesktopInputHitTestChecked,
     WallpaperShellCompositionVerified,
-    ShellCompositionValidationFailed
+    ShellCompositionValidationFailed,
+    DesktopHostCandidateEvaluationStarted,
+    DesktopHostCandidateAttached,
+    DesktopHostCandidateOwnPixelsDetected,
+    DesktopHostCandidateDesktopPixelsDetected,
+    DesktopHostCandidateAnimationDetected,
+    DesktopHostCandidateIconsValidated,
+    DesktopHostCandidateTaskbarValidated,
+    DesktopHostCandidateAccepted,
+    DesktopHostCandidateRejected,
+    DesktopHostCandidateRollbackCompleted,
+    RendererFramesDecoded,
+    RendererFramesPainted,
+    RendererFramesPresentedToOwnHwnd,
+    RendererPixelsVisibleOnComposedDesktop,
+    RendererAnimationVisibleOnComposedDesktop,
+    DesktopIconsVisibleAboveRenderer,
+    TaskbarVisibleAboveRenderer
 }
 
 public static class RendererErrorCodes
@@ -281,10 +300,15 @@ public sealed record RendererMetrics(
     long RootHwnd = 0,
     long OwnerHwnd = 0,
     RendererPresentationMetrics? Presentation = null,
-    RendererShellCompositionMetrics? ShellComposition = null);
+    RendererShellCompositionMetrics? ShellComposition = null,
+    string? WallpaperAttemptId = null);
 
 public sealed record RendererShellCompositionMetrics(
     bool RendererFramesVisibleOnDesktop = false,
+    bool RendererVisibleAboveStaticWallpaper = false,
+    bool RendererFrameDetectedOnComposedDesktop = false,
+    bool RendererAnimationDetectedOnComposedDesktop = false,
+    bool RendererVisibleInBackgroundOnlyRegion = false,
     bool DesktopIconHostLocated = false,
     bool DesktopIconHostVisible = false,
     bool DesktopIconsAboveRenderer = false,
@@ -309,12 +333,20 @@ public sealed record RendererShellCompositionMetrics(
     long ShellViewZOrderIndex = -1,
     long SysListViewZOrderIndex = -1,
     long TaskbarZOrderIndex = -1,
+    int BackgroundSampleCount = 0,
+    int BaselineChangedSamples = 0,
+    int AnimationChangedSamples = 0,
+    int DetectedTestPatternMarkers = 0,
     string? Diagnostic = null);
 
 public static class RendererShellCompositionContract
 {
     public static bool IsVerified(RendererShellCompositionMetrics value) =>
         value.RendererFramesVisibleOnDesktop &&
+        value.RendererVisibleAboveStaticWallpaper &&
+        value.RendererFrameDetectedOnComposedDesktop &&
+        value.RendererAnimationDetectedOnComposedDesktop &&
+        value.RendererVisibleInBackgroundOnlyRegion &&
         value.DesktopIconHostLocated &&
         value.DesktopIconHostVisible &&
         value.DesktopIconsAboveRenderer &&
