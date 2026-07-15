@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using LibVLCSharp.Shared;
 using RTSPWallpaperStudio.Core.Domain;
 using RTSPWallpaperStudio.Core.Services;
@@ -8,21 +10,27 @@ namespace RTSPWallpaperStudio.Renderer;
 
 internal sealed class RendererStreamPlayer : IAsyncDisposable
 {
+    private static readonly Regex RtspCredentialPattern = new("(?<scheme>rtsp://)(?<credentials>[^@\\s]+)@", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private readonly NativeRendererWindow _window;
     private readonly DesktopHostController _desktopHost;
     private readonly Func<RendererEvent, Task> _report;
     private LibVLC? _libVlc;
     private MediaPlayer? _player;
     private Media? _media;
+    private SoftwareVideoFrameBuffer? _frameBuffer;
     private RendererStartOptions? _lastOptions;
     private DesktopHostDiscoveryResult? _lastDiscovery;
     private MonitorInfo? _lastMonitor;
     private string? _lastMediaError;
+    private string? _lastStartFailureDetails;
     private int _reconnectCount;
     private readonly PlaybackProgressTracker _progressTracker = new();
     private readonly List<string> _progressTrace = [];
     private readonly object _progressTraceLock = new();
+    private readonly List<string> _libVlcTrace = [];
+    private readonly object _libVlcTraceLock = new();
     private readonly SemaphoreSlim _operationLock = new(1, 1);
+    private readonly Stopwatch _frameClock = new();
 
     public RendererStreamPlayer(NativeRendererWindow window, DesktopHostController desktopHost, Func<RendererEvent, Task> report)
     {
@@ -39,6 +47,7 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
         await _operationLock.WaitAsync(cancellationToken);
         try
         {
+            _lastStartFailureDetails = null;
             var policy = new ReconnectPolicy();
             const int maxAttempts = 5;
             for (var attempt = 0; attempt < maxAttempts && !cancellationToken.IsCancellationRequested; attempt++)
@@ -60,7 +69,7 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
             {
                 await ReportAsync(RendererEventType.FatalError, RendererErrorCodes.RtspOpenFailed,
                     "RTSP配信元が起動しないため、壁紙を設定できません。",
-                    "初回接続を5回試行しました。go2rtc、カメラ、URL、認証情報を確認してください。");
+                    $"初回接続を5回試行しました。go2rtc、カメラ、URL、認証情報を確認してください。\n最終試行の詳細: {_lastStartFailureDetails ?? "詳細なし"}");
             }
 
             return false;
@@ -82,6 +91,11 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
             _desktopHost.Invalidate();
         }
 
+        // Size the hidden target before decoding. The same HWND is later
+        // attached to WorkerW after the first verified frame.
+        _lastMonitor = FindMonitor(options.MonitorId);
+        _window.PrepareForPlayback(_lastMonitor.Bounds);
+
         await StopPlayerAsync();
         IsAttached = false;
         _lastMediaError = null;
@@ -90,23 +104,36 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
         {
             _progressTrace.Clear();
         }
+        lock (_libVlcTraceLock)
+        {
+            _libVlcTrace.Clear();
+        }
+        _frameClock.Restart();
         try
         {
             LibVLCSharp.Shared.Core.Initialize();
             await ReportAsync(RendererEventType.LibVlcInitialized);
-            _libVlc = new LibVLC("--no-video-title-show", "--no-audio", "--quiet");
+            // The renderer uses LibVLC's software video callbacks. No native
+            // HWND vout is created, so the HEVC stream cannot enter the
+            // Direct3D11 surface queue that previously deadlocked.
+            _libVlc = new LibVLC("--no-video-title-show", "--quiet", "--no-audio", "--vout=vmem", "--avcodec-hw=none");
+            _libVlc.Log += OnLibVlcLog;
             _player = new MediaPlayer(_libVlc)
             {
-                Hwnd = _window.Hwnd,
                 Mute = true
             };
+            _frameBuffer = new SoftwareVideoFrameBuffer(_window.InvalidateVideoFrame, OnFrameDisplayed);
+            _window.SetFrameBuffer(_frameBuffer);
+            _frameBuffer.Configure(_player);
             _player.EncounteredError += OnEncounteredError;
             _player.Buffering += OnBuffering;
             _player.TimeChanged += OnTimeChanged;
 
             await ReportAsync(RendererEventType.StreamOpening);
+            // Custom callbacks require CPU-readable frames. This is also the
+            // safe fallback for HEVC from the SwitchBot/go2rtc path.
             var playbackOptions = new RtspPlaybackOptions(options.Url, options.UserName, options.Password,
-                options.Transport, options.NetworkCachingMs, options.HardwareDecode, options.MuteAudio);
+                options.Transport, options.NetworkCachingMs, HardwareDecodeMode.Disabled, options.MuteAudio);
             var location = RtspLocationBuilder.Build(playbackOptions.Url, playbackOptions.UserName, playbackOptions.Password);
             _media = new Media(_libVlc, location, FromType.FromLocation);
             foreach (var option in RtspPlaybackOptionsFactory.CreateMediaOptions(playbackOptions))
@@ -130,7 +157,7 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
                     : "RTSPストリームで再生エラーが発生しました。";
                 var health = GetPlaybackHealth();
                 return await FailStartAsync(code, message,
-                    $"{_lastMediaError ?? "15秒以内に安定した映像進行を確認できませんでした。"} health={health.ToDiagnosticString()} trace={GetProgressTrace()}",
+                    $"{_lastMediaError ?? "15秒以内に安定した映像進行を確認できませんでした。"} health={health.ToDiagnosticString()} frames={_frameBuffer?.FrameCount ?? 0} frameAt={_frameBuffer?.LastFrameAt?.ToString("O") ?? "none"} trace={GetProgressTrace()} libvlc={GetLibVlcTrace()} framebuffer={_frameBuffer?.LastError ?? "none"}",
                     cancellationToken, suppressTransientFailure);
             }
 
@@ -138,7 +165,6 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
             await ReportAsync(RendererEventType.VideoTrackDetected, userMessage: "映像トラックを検出しました。");
             _lastMediaError = null;
             await ReportAsync(RendererEventType.VideoOutputReady, userMessage: "最初の映像出力を検出しました。壁紙配置を開始します。", metrics: BuildMetrics(null));
-            _lastMonitor = FindMonitor(options.MonitorId);
             var discovery = _desktopHost.DiscoverForApply();
             await ReportAsync(RendererEventType.DesktopHostDiscovered,
                 userMessage: "デスクトップホストを探索し、候補と選択結果を記録しています.",
@@ -274,7 +300,7 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
     public PlaybackHealthSnapshot GetPlaybackHealth()
     {
         var player = _player;
-        if (player is not null)
+        if (player is not null && _frameBuffer is null)
         {
             try
             {
@@ -287,9 +313,15 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
         }
 
         var progress = _progressTracker.Snapshot(DateTimeOffset.UtcNow);
+        var voutCount = unchecked((int)(player?.VoutCount ?? 0u));
+        if (_frameBuffer?.HasFrame == true)
+        {
+            voutCount = Math.Max(1, voutCount);
+        }
+
         return new PlaybackHealthSnapshot(
             player?.State == VLCState.Playing,
-            unchecked((int)(player?.VoutCount ?? 0u)),
+            voutCount,
             progress.MediaTimeMs,
             progress.LastProgressAt,
             progress.ProgressAge,
@@ -316,7 +348,7 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
             }
 
             var health = GetPlaybackHealth();
-            if (health.IsPlaying && health.VoutCount > 0 && health.IsPrimed)
+            if (health.IsPlaying && _frameBuffer?.HasFrame == true && health.IsPrimed)
             {
                 return true;
             }
@@ -343,6 +375,7 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
     private async Task<bool> FailStartAsync(string errorCode, string userMessage, string details,
         CancellationToken cancellationToken, bool suppressTransientFailure = false)
     {
+        _lastStartFailureDetails = details;
         if (!suppressTransientFailure)
         {
             await ReportAsync(RendererEventType.FatalError, errorCode, userMessage, details);
@@ -366,8 +399,16 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
             _player = null;
         }
 
+        _window.SetFrameBuffer(null);
+        _frameBuffer?.Dispose();
+        _frameBuffer = null;
+        _frameClock.Stop();
         _media?.Dispose();
         _media = null;
+        if (_libVlc is not null)
+        {
+            _libVlc.Log -= OnLibVlcLog;
+        }
         _libVlc?.Dispose();
         _libVlc = null;
         await Task.CompletedTask;
@@ -430,7 +471,10 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
 
     private void OnTimeChanged(object? sender, MediaPlayerTimeChangedEventArgs e)
     {
-        ObserveMediaTime(e.Time);
+        if (_frameBuffer is null)
+        {
+            ObserveMediaTime(e.Time);
+        }
     }
 
     private void ObserveMediaTime(long mediaTimeMs)
@@ -445,11 +489,42 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
         }
     }
 
+    private void OnFrameDisplayed()
+    {
+        // Live RTSP streams commonly report a constant MediaPlayer.Time (0).
+        // The decoded-frame callback is the authoritative progress signal for
+        // this path, measured against a monotonic clock to retain stall and
+        // fast-forward protection without depending on live-media timestamps.
+        _ = _progressTracker.Observe(_frameClock.ElapsedMilliseconds, DateTimeOffset.UtcNow);
+    }
+
     private string GetProgressTrace()
     {
         lock (_progressTraceLock)
         {
             return string.Join(",", _progressTrace);
+        }
+    }
+
+    private void OnLibVlcLog(object? sender, LogEventArgs e)
+    {
+        lock (_libVlcTraceLock)
+        {
+            if (_libVlcTrace.Count >= 160)
+            {
+                return;
+            }
+
+            var message = RtspCredentialPattern.Replace(e.Message.Replace('\r', ' ').Replace('\n', ' '), "${scheme}[credentials-redacted]@");
+            _libVlcTrace.Add($"{e.Level}/{e.Module}: {message}");
+        }
+    }
+
+    private string GetLibVlcTrace()
+    {
+        lock (_libVlcTraceLock)
+        {
+            return string.Join(" || ", _libVlcTrace);
         }
     }
 
@@ -483,7 +558,7 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
             ? nint.Zero
             : effectiveDiscovery.HostHwnd;
         return new RendererMetrics(Environment.ProcessId, _window.Hwnd, parent, expectedParent,
-            unchecked((int)(_player?.VoutCount ?? 0u)), _player?.State.ToString() ?? "Stopped", null, null, null,
+            health.VoutCount, _player?.State.ToString() ?? "Stopped", null, null, null,
             _reconnectCount, effectiveDiscovery.Strategy, rect, _lastMonitor?.Bounds ?? new RectD(), health.MediaTimeMs,
             health.LastProgressAt, health.ProgressAge == TimeSpan.MaxValue ? null : health.ProgressAge.TotalSeconds,
             NativeWindowDiagnostics.IsVisible(_window.Hwnd), windowClass, style, extendedStyle, root.ToInt64(), owner.ToInt64());

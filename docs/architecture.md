@@ -8,11 +8,17 @@ App.exe
 
 Renderer.exe
   ├─ 純Win32の非表示トップレベルHWND（WPF VideoViewなし）
-  ├─ LibVLCSharp.Shared.MediaPlayer.Hwnd
-  ├─ First Frame Gate（Playing、VoutCount > 0、メディア時刻の安定進行を検証）
-  ├─ Playback Stall Gate（映像時間の進行を監視し、8秒停止で自動再接続）
+  ├─ LibVLC vmem + CPUフレームコールバック（D3D11のネイティブvoutを経由しない）
+  ├─ GDIのStretchDIBitsで最新フレームをHWNDへ描画
+  ├─ First Frame Gate（Playing、デコード済みフレーム、単調時計による安定進行を検証）
+  ├─ Playback Stall Gate（デコード済みフレームの進行を監視し、8秒停止で自動再接続）
   └─ Appと双方向Named Pipeでイベント・Heartbeatを送受信
 ```
+
+H.265/HEVCの一部のRTSP配信では、LibVLC 3系のD3D11 surface queueが
+WorkerWへ配置するHWNDとの組み合わせでbuffer deadlockになることがあります。
+RendererはCPU読取可能なRV32フレームを受け取り、デコード済みフレームの到着を
+表示・停止監視の基準にすることで、この経路を回避します。
 
 ## Desktop attachの安全境界
 

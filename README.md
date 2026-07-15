@@ -10,11 +10,12 @@ RTSP映像を、Windowsデスクトップアイコンの背面にあるWorkerW�
 - `rtsp://` / `rtsps://` URLの検証と資格情報分離
 - LibVLCSharpによるRenderer別プロセス再生
 - WorkerW / Raised Desktopへの壁紙ウィンドウ配置（実親・スタイル・矩形・Z順の検証付き）
+- H.265/HEVC向けLibVLC vmem + CPUフレームコールバック描画（D3D11 voutのデッドロック回避）
 - Appが先に作る現在ユーザー限定の双方向Named Pipe IPC
-- First Frame Gate：`Playing` / `VoutCount > 0`に加えてメディア時刻の安定進行を確認するまでRendererは表示しない
+- First Frame Gate：`Playing`、デコード済みフレーム、単調時計による安定進行を確認するまでRendererは表示しない
 - Job Object、親PID監視、runtime-state.json、Ctrl + Alt + Shift + F12緊急停止
 - モニター列挙、永続ID生成、Fill / Fit / Stretch / Center / 1:1のレイアウト計算
-- Rendererと同じLibVLC経路を使うRTSP接続テスト（Playing + VoutCount > 0のFirst Frame Gate）
+- LibVLCによるRTSP接続テスト（Playing + 映像出力の確認）
 - 再生後の映像進行監視（8秒停止で `RTSP_PLAYBACK_STALLED` を記録し、MediaPlayerを安全に再生成）
 - 初回接続と自動復旧のバックオフ再試行（起動直後のカメラ・go2rtc準備遅延で壁紙を終了させない）
 - TCP / UDP / 自動方式、ネットワークキャッシュ、ハードウェアデコード設定の共通化

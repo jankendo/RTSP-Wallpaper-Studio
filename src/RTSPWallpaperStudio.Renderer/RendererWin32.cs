@@ -20,7 +20,12 @@ internal static class RendererWin32
     internal const long WsExNoActivate = 0x08000000L;
     internal const uint WmDestroy = 0x0002;
     internal const uint WmClose = 0x0010;
+    internal const uint WmEraseBkgnd = 0x0014;
+    internal const uint WmPaint = 0x000F;
     internal const uint WmNcDestroy = 0x0082;
+    internal const uint DibRgbColors = 0;
+    internal const uint SrcCopy = 0x00CC0020;
+    internal const uint BiRgb = 0;
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     internal struct WndClassEx
@@ -48,6 +53,51 @@ internal static class RendererWin32
         public nint LParam;
         public uint Time;
         public Point Point;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct PaintStruct
+    {
+        public nint Hdc;
+        public int Erase;
+        public Rect PaintRect;
+        public int Restore;
+        public int IncUpdate;
+        public nint Reserved0;
+        public nint Reserved1;
+        public nint Reserved2;
+        public nint Reserved3;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct Rect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct BitmapInfoHeader
+    {
+        public uint Size;
+        public int Width;
+        public int Height;
+        public ushort Planes;
+        public ushort BitCount;
+        public uint Compression;
+        public uint SizeImage;
+        public int XPelsPerMeter;
+        public int YPelsPerMeter;
+        public uint ClrUsed;
+        public uint ClrImportant;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct BitmapInfo
+    {
+        public BitmapInfoHeader Header;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -106,6 +156,25 @@ internal static class RendererWin32
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool SetWindowPos(nint hwnd, nint insertAfter, int x, int y, int width, int height, uint flags);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern nint BeginPaint(nint hwnd, out PaintStruct paint);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool EndPaint(nint hwnd, ref PaintStruct paint);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool GetClientRect(nint hwnd, out Rect rect);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern nint InvalidateRect(nint hwnd, nint rect, [MarshalAs(UnmanagedType.Bool)] bool erase);
+
+    [DllImport("gdi32.dll", SetLastError = true)]
+    internal static extern int StretchDIBits(nint hdc, int xDest, int yDest, int destWidth, int destHeight,
+        int xSrc, int ySrc, int srcWidth, int srcHeight, nint bits, ref BitmapInfo bitmapInfo,
+        uint usage, uint rasterOperation);
 
     [DllImport("kernel32.dll", EntryPoint = "GetModuleHandleW", CharSet = CharSet.Unicode)]
     internal static extern nint GetModuleHandle(string? moduleName);

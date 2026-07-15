@@ -5,7 +5,6 @@ using LibVLCSharp.Shared;
 using Microsoft.Extensions.Logging;
 using RTSPWallpaperStudio.Core.Domain;
 using RTSPWallpaperStudio.Core.Services;
-using RTSPWallpaperStudio.Interop;
 
 namespace RTSPWallpaperStudio.Infrastructure.Diagnostics;
 
@@ -146,10 +145,10 @@ public sealed class ConnectionTester
             }
         }
 
-        Report(ConnectionTestStage.Failed, 100, "PlayingかつVoutCount>0を確認できませんでした。", actualTransport);
+        Report(ConnectionTestStage.Failed, 100, "Playingかつデコード済みフレームを確認できませんでした。", actualTransport);
         var technical = lastException?.ToString() ?? "指定時間内に最初の映像出力が発生しませんでした。";
         return Failure("RTSP映像を再生できません。",
-            "TCP接続だけでは成功扱いにせず、LibVLCのPlayingとVoutCount>0を確認しました。URL、認証、配信ソフト、映像トラックを確認してください。",
+            "TCP接続だけでは成功扱いにせず、LibVLCのPlayingとデコード済みフレームコールバックを確認しました。URL、認証、配信ソフト、映像トラックを確認してください。",
             RendererErrorCodes.RtspFirstFrameTimeout, ConnectionTestStage.Failed, testId, stopwatch.Elapsed, steps, actualTransport, technical);
     }
 
@@ -166,8 +165,8 @@ public sealed class ConnectionTester
 
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         linked.CancelAfter(timeout);
-        using var libVlc = new LibVLC("--no-video-title-show", "--quiet");
-        using var probeWindow = new NativeConnectionProbeWindow();
+        using var libVlc = new LibVLC("--no-video-title-show", "--quiet", "--no-audio", "--vout=vmem", "--avcodec-hw=none");
+        using var frameProbe = new LibVlcFrameProbe();
         var trace = new List<string>();
         void AddTrace(string value)
         {
@@ -181,16 +180,19 @@ public sealed class ConnectionTester
         libVlc.Log += OnLibVlcLog;
         using var player = new MediaPlayer(libVlc)
         {
-            Hwnd = probeWindow.Hwnd,
             Mute = options.MuteAudio
         };
+        frameProbe.Configure(player);
         player.Opening += (_, _) => AddTrace("player Opening");
         player.Playing += (_, _) => AddTrace("player Playing");
         player.Vout += (_, _) => AddTrace($"player Vout={player.VoutCount}");
         player.EncounteredError += (_, _) => AddTrace("player EncounteredError");
         var location = RtspLocationBuilder.Build(options.Url, options.UserName, options.Password);
         using var media = new Media(libVlc, location, FromType.FromLocation);
-        foreach (var option in RtspPlaybackOptionsFactory.CreateMediaOptions(options))
+        // Keep the probe on the same safe decoder path as Renderer. A
+        // connection test must prove decoded frames, not only a D3D11 Vout.
+        var probeOptions = options with { HardwareDecode = HardwareDecodeMode.Disabled };
+        foreach (var option in RtspPlaybackOptionsFactory.CreateMediaOptions(probeOptions))
         {
             media.AddOption(option);
         }
@@ -202,20 +204,21 @@ public sealed class ConnectionTester
             return (false, null, null, $"MediaPlayer.Playがfalseを返しました。\n{string.Join("\n", trace)}");
         }
 
-        report(ConnectionTestStage.WaitingForVideoOutput, 75, "PlayingかつVoutCount>0を待っています。", RtspPlaybackOptionsFactory.DisplayTransport(options.Transport));
+        report(ConnectionTestStage.WaitingForVideoOutput, 75, "Playingかつデコード済みフレームを待っています。", RtspPlaybackOptionsFactory.DisplayTransport(options.Transport));
         var consecutive = 0;
         while (!linked.IsCancellationRequested)
         {
-            if (player.State == VLCState.Playing && player.VoutCount > 0)
+            if (player.State == VLCState.Playing && frameProbe.HasFrame)
             {
                 consecutive++;
                 if (consecutive >= 3)
                 {
                     var tracks = media.Tracks;
                     var videoTracks = tracks?.Count(x => x.TrackType == TrackType.Video) ?? 1;
+                    var voutCount = Math.Max(1, unchecked((int)player.VoutCount));
                     return (true,
-                        new RtspStreamInformation(videoTracks, null, null, null, player.State.ToString(), unchecked((int)player.VoutCount)),
-                        null, $"Playing/Vout gate passed; Parse was not used as the success criterion.\n{string.Join("\n", trace)}");
+                        new RtspStreamInformation(videoTracks, null, null, null, player.State.ToString(), voutCount),
+                        null, $"Playing/frame callback gate passed; frames={frameProbe.FrameCount}; Parse was not used as the success criterion.\n{string.Join("\n", trace)}");
                 }
             }
             else
@@ -227,7 +230,7 @@ public sealed class ConnectionTester
         }
 
         libVlc.Log -= OnLibVlcLog;
-        return (false, null, null, $"最終状態={player.State}、VoutCount={player.VoutCount}。\n{string.Join("\n", trace)}");
+        return (false, null, null, $"最終状態={player.State}、VoutCount={player.VoutCount}、frames={frameProbe.FrameCount}、framebuffer={frameProbe.LastError ?? "none"}。\n{string.Join("\n", trace)}");
     }
 
     private static string RedactTechnical(string value, string url, string? password)

@@ -1,5 +1,7 @@
+using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using RTSPWallpaperStudio.Core.Domain;
 
 namespace RTSPWallpaperStudio.Renderer;
 
@@ -7,8 +9,10 @@ internal sealed class NativeRendererWindow : IDisposable
 {
     internal const string ClassName = "RTSPWallpaperStudio.RendererHost";
     private static readonly RendererWin32.WndProcDelegate WndProc = WindowProc;
+    private static readonly ConcurrentDictionary<nint, NativeRendererWindow> Instances = new();
     private static ushort _classAtom;
     private bool _disposed;
+    private SoftwareVideoFrameBuffer? _frameBuffer;
 
     public NativeRendererWindow()
     {
@@ -18,7 +22,7 @@ internal sealed class NativeRendererWindow : IDisposable
             (int)(RendererWin32.WsExToolWindow | RendererWin32.WsExNoActivate),
             ClassName,
             null,
-            unchecked((int)RendererWin32.WsPopup),
+            unchecked((int)(RendererWin32.WsPopup | RendererWin32.WsClipChildren | RendererWin32.WsClipSiblings)),
             0,
             0,
             1,
@@ -32,10 +36,26 @@ internal sealed class NativeRendererWindow : IDisposable
             throw new Win32Exception(Marshal.GetLastWin32Error(), "Renderer HWNDの作成に失敗しました。");
         }
 
+        Instances[Hwnd] = this;
         RendererWin32.ShowWindow(Hwnd, RendererWin32.SwHide);
     }
 
     public nint Hwnd { get; }
+
+    public void SetFrameBuffer(SoftwareVideoFrameBuffer? frameBuffer)
+    {
+        EnsureNotDisposed();
+        _frameBuffer = frameBuffer;
+        InvalidateVideoFrame();
+    }
+
+    public void InvalidateVideoFrame()
+    {
+        if (!_disposed && Hwnd != 0)
+        {
+            _ = RendererWin32.InvalidateRect(Hwnd, 0, false);
+        }
+    }
 
     public void ShowAfterValidation()
     {
@@ -49,6 +69,16 @@ internal sealed class NativeRendererWindow : IDisposable
         {
             RendererWin32.ShowWindow(Hwnd, RendererWin32.SwHide);
         }
+    }
+
+    public void PrepareForPlayback(RectD bounds)
+    {
+        EnsureNotDisposed();
+        var width = Math.Max(2, (int)Math.Round(bounds.Width));
+        var height = Math.Max(2, (int)Math.Round(bounds.Height));
+        RendererWin32.SetWindowPos(Hwnd, 0,
+            (int)Math.Round(bounds.X), (int)Math.Round(bounds.Y), width, height,
+            RendererWin32.SwpNoActivate | RendererWin32.SwpNoZOrder | RendererWin32.SwpFrameChanged);
     }
 
     public void CloseFromAnyThread()
@@ -94,6 +124,8 @@ internal sealed class NativeRendererWindow : IDisposable
         }
 
         _disposed = true;
+        _frameBuffer = null;
+        Instances.TryRemove(Hwnd, out _);
         if (Hwnd != 0)
         {
             RendererWin32.DestroyWindow(Hwnd);
@@ -123,8 +155,23 @@ internal sealed class NativeRendererWindow : IDisposable
 
     private static nint WindowProc(nint hwnd, uint message, nuint wParam, nint lParam)
     {
+        if (Instances.TryGetValue(hwnd, out var window))
+        {
+            if (message == RendererWin32.WmPaint)
+            {
+                window.Paint();
+                return 0;
+            }
+
+            if (message == RendererWin32.WmEraseBkgnd)
+            {
+                return 1;
+            }
+        }
+
         if (message == RendererWin32.WmDestroy)
         {
+            Instances.TryRemove(hwnd, out _);
             RendererWin32.PostQuitMessage(0);
         }
 
@@ -134,6 +181,24 @@ internal sealed class NativeRendererWindow : IDisposable
         }
 
         return RendererWin32.DefWindowProc(hwnd, message, wParam, lParam);
+    }
+
+    private void Paint()
+    {
+        var hdc = RendererWin32.BeginPaint(Hwnd, out var paintStruct);
+        try
+        {
+            if (hdc == 0 || _frameBuffer is null || !RendererWin32.GetClientRect(Hwnd, out var clientRect))
+            {
+                return;
+            }
+
+            _frameBuffer.Paint(hdc, clientRect.Right - clientRect.Left, clientRect.Bottom - clientRect.Top);
+        }
+        finally
+        {
+            RendererWin32.EndPaint(Hwnd, ref paintStruct);
+        }
     }
 
     private void EnsureNotDisposed()
