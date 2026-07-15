@@ -241,7 +241,13 @@ public sealed record RendererMetrics(
     RectD MonitorRect,
     long MediaTimeMs = -1,
     DateTimeOffset? LastVideoProgressAt = null,
-    double? VideoProgressAgeSeconds = null);
+    double? VideoProgressAgeSeconds = null,
+    bool WindowVisible = false,
+    string? WindowClass = null,
+    long WindowStyle = 0,
+    long ExtendedWindowStyle = 0,
+    long RootHwnd = 0,
+    long OwnerHwnd = 0);
 
 public sealed record RendererEvent(
     string RendererId,

@@ -6,6 +6,7 @@ namespace RTSPWallpaperStudio.Interop;
 internal static class NativeMethods
 {
     internal const nint HwndDesktop = 0;
+    internal const nint HwndBottom = 1;
     internal const uint WmShellChange = 0x052C;
     internal const uint WmHotkey = 0x0312;
     internal const uint WmDestroy = 0x0002;
@@ -30,9 +31,10 @@ internal static class NativeMethods
     internal const uint GwHwndFirst = 0;
     internal const uint GwHwndPrev = 3;
     internal const uint GwHwndNext = 2;
+    internal const uint GwHwndOwner = 4;
     internal const uint GaParent = 1;
     internal const uint GaRoot = 2;
-    internal const long WsPopup = unchecked((int)0x80000000);
+    internal const long WsPopup = 0x80000000L;
     internal const long WsChild = 0x40000000L;
     internal const long WsVisible = 0x10000000L;
     internal const long WsClipChildren = 0x02000000L;
@@ -147,6 +149,9 @@ internal static class NativeMethods
     [DllImport("user32.dll", EntryPoint = "GetClassNameW", CharSet = CharSet.Unicode, SetLastError = true)]
     internal static extern int GetClassName(nint hwnd, StringBuilder className, int maxCount);
 
+    [DllImport("user32.dll", EntryPoint = "GetWindowTextW", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern int GetWindowText(nint hwnd, StringBuilder text, int maxCount);
+
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW", SetLastError = true)]
     internal static extern nint GetWindowLongPtr(nint hwnd, int index);
 
@@ -233,6 +238,34 @@ internal static class NativeMethods
 
         var buffer = new StringBuilder(256);
         return GetClassName(hwnd, buffer, buffer.Capacity) > 0 ? buffer.ToString() : string.Empty;
+    }
+
+    internal static string GetWindowTextSafe(nint hwnd)
+    {
+        if (hwnd == 0)
+        {
+            return string.Empty;
+        }
+
+        var buffer = new StringBuilder(512);
+        return GetWindowText(hwnd, buffer, buffer.Capacity) > 0 ? buffer.ToString() : string.Empty;
+    }
+
+    internal static string DescribeWindow(nint hwnd, bool selected = false, string? rejection = null)
+    {
+        if (hwnd == 0)
+        {
+            return "hwnd=0x0;selected=false;rejected=invalid";
+        }
+
+        var threadId = GetWindowThreadProcessId(hwnd, out var processId);
+        var parent = GetParent(hwnd);
+        var owner = GetWindow(hwnd, GwHwndOwner);
+        var rect = GetWindowRect(hwnd, out var nativeRect)
+            ? $"rect={nativeRect.Left},{nativeRect.Top},{nativeRect.Right},{nativeRect.Bottom}"
+            : $"rect=error:{Marshal.GetLastWin32Error()}";
+        var rejected = string.IsNullOrWhiteSpace(rejection) ? "" : $";rejection={rejection}";
+        return $"hwnd=0x{hwnd.ToInt64():X};class={GetClassNameSafe(hwnd)};text={GetWindowTextSafe(hwnd)};pid={processId};tid={threadId};parent=0x{parent.ToInt64():X};owner=0x{owner.ToInt64():X};{rect};visible={IsWindowVisible(hwnd)};style=0x{GetWindowLongPtr(hwnd, GwlStyle).ToInt64():X};exStyle=0x{GetWindowLongPtr(hwnd, GwlexStyle).ToInt64():X};selected={selected}{rejected}";
     }
 
     internal static bool HasStyle(nint hwnd, long style) => (GetWindowLongPtr(hwnd, GwlStyle).ToInt64() & style) == style;

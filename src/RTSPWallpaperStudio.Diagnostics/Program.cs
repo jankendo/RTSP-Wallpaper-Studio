@@ -18,7 +18,8 @@ internal static class Program
         var options = Parse(args);
         if (options.ShowHelp)
         {
-            Console.WriteLine("Usage: RTSPWallpaperStudio.Diagnostics.exe --url <rtsp-url> [--transport tcp|udp|automatic] [--timeout 10] [--cache 300] [--start-go2rtc] [--wallpaper|--wallpaper-only] [--hold-seconds 30] [--ipc-smoke]");
+            Console.WriteLine("Usage: RTSPWallpaperStudio.Diagnostics.exe --url <rtsp-url> [--transport tcp|udp|automatic] [--timeout 10] [--cache 300] [--start-go2rtc] [--wallpaper|--wallpaper-only] [--desktop-probe] [--hold-seconds 30] [--ipc-smoke]");
+            Console.WriteLine("       RTSPWallpaperStudio.Diagnostics.exe --probe-hwnd <hex-or-decimal-hwnd> [--probe-seconds 1]");
             Console.WriteLine("       RTSPWallpaperStudio.Diagnostics.exe --startup-status");
             Console.WriteLine("       RTSPWallpaperStudio.Diagnostics.exe --startup-enable [--startup-exe <RTSPWallpaperStudio.App.exe>]");
             Console.WriteLine("       RTSPWallpaperStudio.Diagnostics.exe --startup-disable");
@@ -28,6 +29,11 @@ internal static class Program
         if (options.StartupAction is not null)
         {
             return RunStartupCommand(options);
+        }
+
+        if (options.ProbeHwnd is not null)
+        {
+            return await RunDesktopProbeAsync(options);
         }
 
         if (options.Wallpaper || options.IpcSmoke)
@@ -83,14 +89,16 @@ internal static class Program
             }
 
             var wallpaperResult = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            RendererMetrics? visibleMetrics = null;
             rendererManager.RendererEventReceived += (_, rendererEvent) =>
             {
                 var metrics = rendererEvent.Metrics is { } m
-                    ? $" metrics=state:{m.MediaState},vout:{m.VoutCount},time:{m.MediaTimeMs},age:{m.VideoProgressAgeSeconds:0.0}s,reconnect:{m.ReconnectCount}"
+                    ? $" metrics=state:{m.MediaState},vout:{m.VoutCount},time:{m.MediaTimeMs},age:{m.VideoProgressAgeSeconds:0.0}s,reconnect:{m.ReconnectCount},visible:{m.WindowVisible},class:{m.WindowClass},hwnd:0x{m.RendererHwnd.ToInt64():X},parent:0x{m.ParentHwnd.ToInt64():X},expectedParent:0x{m.ExpectedParentHwnd.ToInt64():X},rect:{m.RendererRect},monitor:{m.MonitorRect}"
                     : string.Empty;
                 Console.Error.WriteLine($"[renderer] {rendererEvent.Type} code={rendererEvent.ErrorCode ?? "-"} message={rendererEvent.UserMessage ?? "-"}{metrics} details={rendererEvent.TechnicalDetails ?? "-"}");
                 if (rendererEvent.Type == RendererEventType.WallpaperVisible)
                 {
+                    visibleMetrics = rendererEvent.Metrics;
                     wallpaperResult.TrySetResult(true);
                 }
                 else if (rendererEvent.Type is RendererEventType.FatalError or RendererEventType.PlaybackError or RendererEventType.AttachmentFailed)
@@ -105,6 +113,14 @@ internal static class Program
             await rendererManager.StartAsync(startOptions).WaitAsync(TimeSpan.FromSeconds(15));
             var wallpaperSucceeded = await wallpaperResult.Task.WaitAsync(TimeSpan.FromSeconds(Math.Max(30, options.TimeoutSeconds + 20)));
             Console.WriteLine($"WALLPAPER_RESULT={(wallpaperSucceeded ? "SUCCESS" : "FAILED")}");
+            if (wallpaperSucceeded && options.DesktopProbe && visibleMetrics is { } metrics)
+            {
+                var first = DesktopPixelProbe.Sample(metrics.RendererRect);
+                await Task.Delay(TimeSpan.FromSeconds(1));
+                var second = DesktopPixelProbe.Sample(metrics.RendererRect);
+                var diff = DesktopPixelProbe.Compare(first, second);
+                Console.WriteLine($"DESKTOP_PROBE={JsonSerializer.Serialize(new { rendererHwnd = metrics.RendererHwnd.ToInt64(), parentHwnd = metrics.ParentHwnd.ToInt64(), expectedParentHwnd = metrics.ExpectedParentHwnd.ToInt64(), metrics.RendererRect, metrics.MonitorRect, metrics.WindowVisible, metrics.WindowClass, firstSampleCount = first.SampleCount, firstNonBlackSampleCount = first.NonBlackSampleCount, firstAverageLuma = first.AverageLuma, firstDiagnostic = first.Diagnostic, secondSampleCount = second.SampleCount, secondNonBlackSampleCount = second.NonBlackSampleCount, secondAverageLuma = second.AverageLuma, secondDiagnostic = second.Diagnostic, diff.ComparedSamples, diff.ChangedSamples, diff.AverageAbsoluteRgbDelta, diff.HasMovement }, JsonOptions)}");
+            }
             if (wallpaperSucceeded && options.HoldSeconds > 0)
             {
                 Console.WriteLine($"WALLPAPER_HOLD_SECONDS={options.HoldSeconds}");
@@ -145,6 +161,9 @@ internal static class Program
         var wallpaper = false;
         var wallpaperOnly = false;
         var ipcSmoke = false;
+        var desktopProbe = false;
+        nint? probeHwnd = null;
+        var probeSeconds = 1;
         var holdSeconds = 0;
         string? startupAction = null;
         string? startupExecutable = null;
@@ -163,6 +182,14 @@ internal static class Program
                 case "--wallpaper": wallpaper = true; break;
                 case "--wallpaper-only": wallpaper = true; wallpaperOnly = true; break;
                 case "--ipc-smoke": ipcSmoke = true; break;
+                case "--desktop-probe": desktopProbe = true; break;
+                case "--probe-hwnd":
+                    var hwndText = args[++i];
+                    probeHwnd = (nint)(hwndText.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+                        ? Convert.ToInt64(hwndText[2..], 16)
+                        : long.Parse(hwndText, CultureInfo.InvariantCulture));
+                    break;
+                case "--probe-seconds": probeSeconds = Math.Clamp(int.Parse(args[++i], CultureInfo.InvariantCulture), 1, 60); break;
                 case "--hold-seconds": holdSeconds = Math.Clamp(int.Parse(args[++i], CultureInfo.InvariantCulture), 0, 3600); break;
                 case "--startup-status": startupAction = "status"; break;
                 case "--startup-enable": startupAction = "enable"; break;
@@ -175,7 +202,7 @@ internal static class Program
         }
 
         return new DiagnosticOptions(url, user, password, transport, timeout, cache, hardware, startGo2Rtc, wallpaper, wallpaperOnly, ipcSmoke,
-            holdSeconds, startupAction, startupExecutable, help);
+            desktopProbe, probeHwnd, probeSeconds, holdSeconds, startupAction, startupExecutable, help);
     }
 
     private static int RunStartupCommand(DiagnosticOptions options)
@@ -193,6 +220,68 @@ internal static class Program
         return result.Success ? 0 : 21;
     }
 
+    private static async Task<int> RunDesktopProbeAsync(DiagnosticOptions options)
+    {
+        var hwnd = options.ProbeHwnd!.Value;
+        if (!NativeWindowDiagnostics.IsWindow(hwnd) || !DesktopWindowDiagnostics.TryGetScreenRect(hwnd, out var rect))
+        {
+            Console.WriteLine($"DESKTOP_PROBE=FAILED code=INVALID_HWND hwnd=0x{hwnd.ToInt64():X}");
+            return 30;
+        }
+
+        var monitors = new DesktopMonitorProvider().GetMonitors();
+        var monitor = monitors.FirstOrDefault(x => rect.X >= x.Bounds.X && rect.Y >= x.Bounds.Y &&
+                                                   rect.Right <= x.Bounds.Right && rect.Bottom <= x.Bounds.Bottom);
+        var discovery = new DesktopHostDiscovery().DiscoverExisting();
+        var attachDiagnostic = string.Empty;
+        var attachValid = discovery.Success && DesktopAttachmentValidator.Validate(hwnd, discovery, out attachDiagnostic);
+        if (!discovery.Success)
+        {
+            attachDiagnostic = discovery.Diagnostic;
+        }
+
+        var rectDiagnostic = string.Empty;
+        var rectValid = monitor is not null && DesktopAttachmentValidator.ValidateRect(hwnd, monitor.Bounds, out rectDiagnostic);
+        var first = DesktopPixelProbe.Sample(rect);
+        await Task.Delay(TimeSpan.FromSeconds(options.ProbeSeconds));
+        var second = DesktopPixelProbe.Sample(rect);
+        var diff = DesktopPixelProbe.Compare(first, second);
+        var result = new
+        {
+            hwnd = hwnd.ToInt64(),
+            processId = NativeWindowDiagnostics.GetProcessId(hwnd),
+            className = NativeWindowDiagnostics.GetClassName(hwnd),
+            parentHwnd = DesktopWindowDiagnostics.GetParent(hwnd).ToInt64(),
+            ownerHwnd = NativeWindowDiagnostics.GetOwner(hwnd).ToInt64(),
+            rootHwnd = NativeWindowDiagnostics.GetRoot(hwnd).ToInt64(),
+            visible = NativeWindowDiagnostics.IsVisible(hwnd),
+            style = $"0x{NativeWindowDiagnostics.GetStyle(hwnd):X}",
+            extendedStyle = $"0x{NativeWindowDiagnostics.GetExtendedStyle(hwnd):X}",
+            rect,
+            monitor = monitor?.Bounds,
+            strategy = discovery.Strategy.ToString(),
+            expectedParentHwnd = (discovery.Strategy == DesktopLayoutStrategy.RaisedDesktop ? nint.Zero : discovery.HostHwnd).ToInt64(),
+            attachValid,
+            attachDiagnostic,
+            rectValid,
+            rectDiagnostic,
+            firstSampleCount = first.SampleCount,
+            firstNonBlackSampleCount = first.NonBlackSampleCount,
+            firstAverageLuma = first.AverageLuma,
+            firstDiagnostic = first.Diagnostic,
+            secondSampleCount = second.SampleCount,
+            secondNonBlackSampleCount = second.NonBlackSampleCount,
+            secondAverageLuma = second.AverageLuma,
+            secondDiagnostic = second.Diagnostic,
+            diff.ComparedSamples,
+            diff.ChangedSamples,
+            diff.AverageAbsoluteRgbDelta,
+            diff.HasMovement
+        };
+        Console.WriteLine($"DESKTOP_PROBE={JsonSerializer.Serialize(result, JsonOptions)}");
+        return NativeWindowDiagnostics.IsVisible(hwnd) && attachValid && rectValid && first.HasNonBlackPixels && diff.HasMovement ? 0 : 31;
+    }
+
     private static async Task<int> RunWallpaperOnlyAsync(DiagnosticOptions options, Go2RtcProcessManager? relay)
     {
         using var loggerFactory = LoggerFactory.Create(builder => builder.AddSimpleConsole().SetMinimumLevel(LogLevel.Information));
@@ -207,14 +296,16 @@ internal static class Program
             }
 
             var wallpaperResult = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            RendererMetrics? visibleMetrics = null;
             rendererManager.RendererEventReceived += (_, rendererEvent) =>
             {
                 var metrics = rendererEvent.Metrics is { } m
-                    ? $" metrics=state:{m.MediaState},vout:{m.VoutCount},time:{m.MediaTimeMs},age:{m.VideoProgressAgeSeconds:0.0}s,reconnect:{m.ReconnectCount}"
+                    ? $" metrics=state:{m.MediaState},vout:{m.VoutCount},time:{m.MediaTimeMs},age:{m.VideoProgressAgeSeconds:0.0}s,reconnect:{m.ReconnectCount},visible:{m.WindowVisible},class:{m.WindowClass},hwnd:0x{m.RendererHwnd.ToInt64():X},parent:0x{m.ParentHwnd.ToInt64():X},expectedParent:0x{m.ExpectedParentHwnd.ToInt64():X},rect:{m.RendererRect},monitor:{m.MonitorRect}"
                     : string.Empty;
                 Console.Error.WriteLine($"[renderer] {rendererEvent.Type} code={rendererEvent.ErrorCode ?? "-"} message={rendererEvent.UserMessage ?? "-"}{metrics} details={rendererEvent.TechnicalDetails ?? "-"}");
                 if (rendererEvent.Type == RendererEventType.WallpaperVisible)
                 {
+                    visibleMetrics = rendererEvent.Metrics;
                     wallpaperResult.TrySetResult(true);
                 }
                 else if (rendererEvent.Type is RendererEventType.FatalError or RendererEventType.PlaybackError or RendererEventType.AttachmentFailed)
@@ -229,6 +320,14 @@ internal static class Program
             await rendererManager.StartAsync(startOptions).WaitAsync(TimeSpan.FromSeconds(15));
             var wallpaperSucceeded = await wallpaperResult.Task.WaitAsync(TimeSpan.FromSeconds(120));
             Console.WriteLine($"WALLPAPER_RESULT={(wallpaperSucceeded ? "SUCCESS" : "FAILED")}");
+            if (wallpaperSucceeded && options.DesktopProbe && visibleMetrics is { } metrics)
+            {
+                var first = DesktopPixelProbe.Sample(metrics.RendererRect);
+                await Task.Delay(TimeSpan.FromSeconds(1));
+                var second = DesktopPixelProbe.Sample(metrics.RendererRect);
+                var diff = DesktopPixelProbe.Compare(first, second);
+                Console.WriteLine($"DESKTOP_PROBE={JsonSerializer.Serialize(new { rendererHwnd = metrics.RendererHwnd.ToInt64(), parentHwnd = metrics.ParentHwnd.ToInt64(), expectedParentHwnd = metrics.ExpectedParentHwnd.ToInt64(), metrics.RendererRect, metrics.MonitorRect, metrics.WindowVisible, metrics.WindowClass, firstSampleCount = first.SampleCount, firstNonBlackSampleCount = first.NonBlackSampleCount, firstAverageLuma = first.AverageLuma, firstDiagnostic = first.Diagnostic, secondSampleCount = second.SampleCount, secondNonBlackSampleCount = second.NonBlackSampleCount, secondAverageLuma = second.AverageLuma, secondDiagnostic = second.Diagnostic, diff.ComparedSamples, diff.ChangedSamples, diff.AverageAbsoluteRgbDelta, diff.HasMovement }, JsonOptions)}");
+            }
             if (wallpaperSucceeded && options.HoldSeconds > 0)
             {
                 Console.WriteLine($"WALLPAPER_HOLD_SECONDS={options.HoldSeconds}");
@@ -302,5 +401,5 @@ internal static class Program
 
     private sealed record DiagnosticOptions(string Url, string? UserName, string? Password, TransportMode Transport,
         int TimeoutSeconds, int CacheMs, HardwareDecodeMode HardwareDecode, bool StartGo2Rtc, bool Wallpaper, bool WallpaperOnly, bool IpcSmoke,
-        int HoldSeconds, string? StartupAction, string? StartupExecutable, bool ShowHelp);
+        bool DesktopProbe, nint? ProbeHwnd, int ProbeSeconds, int HoldSeconds, string? StartupAction, string? StartupExecutable, bool ShowHelp);
 }

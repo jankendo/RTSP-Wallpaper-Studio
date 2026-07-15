@@ -12,7 +12,7 @@ internal static class RendererWin32
     internal const uint SwpNoActivate = 0x0010;
     internal const uint SwpNoZOrder = 0x0004;
     internal const uint SwpFrameChanged = 0x0020;
-    internal const long WsPopup = unchecked((int)0x80000000);
+    internal const long WsPopup = 0x80000000L;
     internal const long WsChild = 0x40000000L;
     internal const long WsClipChildren = 0x02000000L;
     internal const long WsClipSiblings = 0x04000000L;

@@ -618,7 +618,8 @@ public partial class MainViewModel : ObservableObject
         var age = metrics.VideoProgressAgeSeconds is { } seconds
             ? $"{seconds:0.0}秒前"
             : "未取得";
-        PlaybackHealth = $"{metrics.MediaState}  ·  Vout {metrics.VoutCount}  ·  映像進行 {age}  ·  MediaTime {metrics.MediaTimeMs}ms  ·  再接続 {metrics.ReconnectCount}回";
+        PlaybackHealth = $"{metrics.MediaState}  ·  Vout {metrics.VoutCount}  ·  映像進行 {age}  ·  MediaTime {metrics.MediaTimeMs}ms  ·  再接続 {metrics.ReconnectCount}回\n" +
+                         $"HWND 0x{metrics.RendererHwnd.ToInt64():X}  ·  親 0x{metrics.ParentHwnd.ToInt64():X} / 期待値 0x{metrics.ExpectedParentHwnd.ToInt64():X}  ·  表示 {metrics.WindowVisible}  ·  矩形 {metrics.RendererRect}  ·  モニター {metrics.MonitorRect}";
     }
 
     private async Task MarkFailureAsync(string code, string message, string? technicalDetails)

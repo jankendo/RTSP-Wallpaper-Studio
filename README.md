@@ -63,10 +63,15 @@ dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.D
 dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.Diagnostics.csproj -c Release -p:Platform=x64 -- --ipc-smoke
 dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.Diagnostics.csproj -c Release -p:Platform=x64 -- --url rtsp://127.0.0.1:8555/test --transport tcp --wallpaper --hold-seconds 30
 dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.Diagnostics.csproj -c Release -p:Platform=x64 -- --url rtsp://127.0.0.1:8555/test --transport tcp --wallpaper-only --hold-seconds 30
+dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.Diagnostics.csproj -c Release -p:Platform=x64 -- --url rtsp://127.0.0.1:8555/test --transport tcp --wallpaper-only --desktop-probe --hold-seconds 30
 ```
 
 `--wallpaper` を付けると、接続テスト成功後にRendererを起動し、`WallpaperVisible`イベントを受信してから停止します。`--hold-seconds` を併用すると指定秒数だけ表示を維持し、長時間再生・フリーズ監視を検証できます。`--start-go2rtc` は `C:\go2rtc\go2rtc.exe` を診断プロセスの所有下で起動し、検証終了時にそれだけを停止します。`--ipc-smoke` はRTSP接続を省略してRendererのNamed Pipe接続、Ready/Heartbeat/停止イベントだけを検証します。GUIを使わないため、CI・障害再現・ログ採取に利用できます。
-`--wallpaper-only` は接続テストを省略し、アプリの「壁紙に設定」操作と同じRenderer直接起動を検証します。
+`--wallpaper-only` は接続テストを省略し、アプリの「壁紙に設定」操作と同じRenderer直接起動を検証します。`--desktop-probe` は表示HWNDの親・owner・class・style・矩形・可視状態を確認し、実デスクトップDCの非黒サンプルと1秒差分から動画の動きを確認します。既にGUIから表示中のHWNDを検証する場合は、ログ／診断画面のHWNDを使って次を実行できます。
+
+```powershell
+dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.Diagnostics.csproj -c Release -p:Platform=x64 -- --probe-hwnd 0x123456 --probe-seconds 2
+```
 
 アプリは閉じるボタンまたは最小化で終了せず、通知領域へ格納されます。トレイの「表示」で画面を戻し、「緊急停止」でRendererを停止し、「終了」で完全終了します。設定画面の「Windows起動時に起動」を有効にして保存すると、現在ユーザーのHKCU Runへアプリ本体を登録します。「起動時は画面を表示しない」を有効にすると、ログオン時はトレイだけで起動します。
 
@@ -92,7 +97,7 @@ Portable ZIPを作成するには、PowerShellで次を実行します。
 .\installer\scripts\build-portable.ps1
 ```
 
-出力先は `artifacts\portable\` です。AppとRendererを同じフォルダーへ配置し、LibVLC関連ファイルも同梱します。
+出力先は `artifacts\portable\` です。App直下に同梱Rendererを配置するほか、`renderer` siblingフォルダーも解決できるため、配布レイアウトを変更しても実行ファイル・作業ディレクトリ・LibVLC native/pluginsの取り違えを防止します。起動時には解決した絶対パス、配置種別、作業ディレクトリ、ファイルバージョン、更新時刻、SHA256をログへ記録します。
 
 MSIXは `installer\msix\build-msix.ps1` を使います。開発用自己署名証明書は端末ごとに信頼が必要で、正式配布には正式なコード署名証明書を使用してください。
 

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using RTSPWallpaperStudio.Core.Domain;
 using RTSPWallpaperStudio.Core.Services;
@@ -13,6 +14,8 @@ internal static class Program
     {
         try
         {
+            Console.OutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+            Console.SetError(new StreamWriter(Console.OpenStandardError(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)) { AutoFlush = true });
             RunAsync(args).GetAwaiter().GetResult();
         }
         catch (Exception ex)

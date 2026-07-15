@@ -16,6 +16,7 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
     private Media? _media;
     private RendererStartOptions? _lastOptions;
     private DesktopHostDiscoveryResult? _lastDiscovery;
+    private MonitorInfo? _lastMonitor;
     private string? _lastMediaError;
     private int _reconnectCount;
     private readonly PlaybackProgressTracker _progressTracker = new();
@@ -137,7 +138,12 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
             await ReportAsync(RendererEventType.VideoTrackDetected, userMessage: "映像トラックを検出しました。");
             _lastMediaError = null;
             await ReportAsync(RendererEventType.VideoOutputReady, userMessage: "最初の映像出力を検出しました。壁紙配置を開始します。", metrics: BuildMetrics(null));
-            var attach = _desktopHost.Attach(_window.Hwnd, FindMonitor(options.MonitorId));
+            _lastMonitor = FindMonitor(options.MonitorId);
+            var discovery = _desktopHost.DiscoverForApply();
+            await ReportAsync(RendererEventType.DesktopHostDiscovered,
+                userMessage: "デスクトップホストを探索し、候補と選択結果を記録しています.",
+                technicalDetails: discovery.Diagnostic);
+            var attach = _desktopHost.Attach(_window.Hwnd, _lastMonitor, discovery);
             if (!attach.Success)
             {
                 await ReportAsync(RendererEventType.AttachmentFailed, attach.ErrorCode, attach.UserMessage, attach.TechnicalDetails);
@@ -149,7 +155,8 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
             await ReportAsync(RendererEventType.DesktopHostDiscovered, userMessage: attach.Discovery?.Diagnostic,
                 technicalDetails: attach.Discovery?.Diagnostic);
             _lastDiscovery = attach.Discovery;
-            await ReportAsync(RendererEventType.AttachmentSucceeded, metrics: BuildMetrics(attach.Discovery));
+            await ReportAsync(RendererEventType.AttachmentSucceeded, technicalDetails: attach.TechnicalDetails,
+                metrics: BuildMetrics(attach.Discovery));
             if (!_desktopHost.ValidateAttachment(_window.Hwnd, out var validationDiagnostic))
             {
                 return await FailAsync(RendererErrorCodes.WallpaperParentMismatch,
@@ -467,10 +474,19 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
         var rect = DesktopWindowDiagnostics.TryGetScreenRect(_window.Hwnd, out var screenRect)
             ? screenRect
             : new RectD();
-        return new RendererMetrics(Environment.ProcessId, _window.Hwnd, parent, effectiveDiscovery.HostHwnd,
+        var style = NativeWindowDiagnostics.GetStyle(_window.Hwnd);
+        var extendedStyle = NativeWindowDiagnostics.GetExtendedStyle(_window.Hwnd);
+        var root = NativeWindowDiagnostics.GetRoot(_window.Hwnd);
+        var owner = NativeWindowDiagnostics.GetOwner(_window.Hwnd);
+        var windowClass = NativeWindowDiagnostics.GetClassName(_window.Hwnd);
+        var expectedParent = effectiveDiscovery.Strategy == DesktopLayoutStrategy.RaisedDesktop
+            ? nint.Zero
+            : effectiveDiscovery.HostHwnd;
+        return new RendererMetrics(Environment.ProcessId, _window.Hwnd, parent, expectedParent,
             unchecked((int)(_player?.VoutCount ?? 0u)), _player?.State.ToString() ?? "Stopped", null, null, null,
-            _reconnectCount, effectiveDiscovery.Strategy, rect, rect, health.MediaTimeMs,
-            health.LastProgressAt, health.ProgressAge == TimeSpan.MaxValue ? null : health.ProgressAge.TotalSeconds);
+            _reconnectCount, effectiveDiscovery.Strategy, rect, _lastMonitor?.Bounds ?? new RectD(), health.MediaTimeMs,
+            health.LastProgressAt, health.ProgressAge == TimeSpan.MaxValue ? null : health.ProgressAge.TotalSeconds,
+            NativeWindowDiagnostics.IsVisible(_window.Hwnd), windowClass, style, extendedStyle, root.ToInt64(), owner.ToInt64());
     }
 
     private Task ReportAsync(RendererEventType type, string? errorCode = null, string? userMessage = null,

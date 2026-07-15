@@ -155,10 +155,10 @@
                                         <TextBlock Text="再生コントロール" FontSize="18" FontWeight="SemiBold" />
                                         <TextBlock Text="{Binding StatusMessage}" Foreground="{DynamicResource MutedInk}" Margin="0,8,0,14" TextWrapping="Wrap" MaxHeight="62" />
                                         <WrapPanel>
-                                            <Button Content="接続テスト" Command="{Binding TestConnectionCommand}" Style="{StaticResource SecondaryButton}" />
-                                            <Button Content="壁紙に適用" Command="{Binding ApplyCommand}" Style="{StaticResource PrimaryButton}" />
-                                            <Button Content="停止" Command="{Binding StopCommand}" Style="{StaticResource SecondaryButton}" />
-                                            <Button Content="キャンセル" Command="{Binding CancelConnectionTestCommand}" Style="{StaticResource QuietButton}" Visibility="{Binding IsConnectionTestRunning, Converter={StaticResource BoolToVisibility}}" />
+                                            <Button Content="接続テスト" Command="{Binding TestConnectionCommand}" Style="{StaticResource SecondaryButton}" AutomationProperties.AutomationId="ApplyConnectionTestButton" AutomationProperties.Name="壁紙設定の接続テスト" />
+                                            <Button Content="壁紙に適用" Command="{Binding ApplyCommand}" Style="{StaticResource PrimaryButton}" AutomationProperties.AutomationId="ApplyWallpaperButton" AutomationProperties.Name="壁紙に適用" />
+                                            <Button Content="停止" Command="{Binding StopCommand}" Style="{StaticResource SecondaryButton}" AutomationProperties.AutomationId="StopWallpaperButton" AutomationProperties.Name="壁紙を停止" />
+                                            <Button Content="キャンセル" Command="{Binding CancelConnectionTestCommand}" Style="{StaticResource QuietButton}" AutomationProperties.AutomationId="CancelConnectionTestButton" AutomationProperties.Name="接続テストをキャンセル" Visibility="{Binding IsConnectionTestRunning, Converter={StaticResource BoolToVisibility}}" />
                                         </WrapPanel>
                                     </StackPanel>
                                 </Border>
@@ -197,11 +197,11 @@
                                 <ListBox.ItemTemplate><DataTemplate><Border Padding="14" Margin="0,0,0,8" Background="{DynamicResource ButtonBackground}" CornerRadius="10"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="8" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions><Border Grid.Column="0" Background="{DynamicResource Accent}" CornerRadius="4" Margin="0,1,12,1" /><StackPanel Grid.Column="1"><TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" FontSize="15" /><TextBlock Text="{Binding Url}" Foreground="{DynamicResource MutedInk}" TextTrimming="CharacterEllipsis" Margin="0,4,0,0" /><TextBlock Text="選択すると右側の接続設定へ反映" Foreground="{DynamicResource MutedInk}" FontSize="11" Margin="0,6,0,0" /></StackPanel></Grid></Border></DataTemplate></ListBox.ItemTemplate>
                             </ListBox>
                             <TextBlock Text="RTSP URL" FontWeight="SemiBold" />
-                            <TextBox Text="{Binding SelectedProfile.Url, UpdateSourceTrigger=PropertyChanged}" Padding="10" Margin="0,5,0,4" FontSize="15" />
+                            <TextBox Text="{Binding SelectedProfile.Url, UpdateSourceTrigger=PropertyChanged}" Padding="10" Margin="0,5,0,4" FontSize="15" AutomationProperties.AutomationId="RtspUrlTextBox" AutomationProperties.Name="RTSP URL" />
                             <TextBlock Text="例：rtsp://127.0.0.1:8554/switchbot3mp" Foreground="{DynamicResource MutedInk}" />
                             <Grid Margin="0,18,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                                <StackPanel Grid.Column="0" Margin="0,0,8,0"><TextBlock Text="表示名" FontWeight="SemiBold" /><TextBox Text="{Binding SelectedProfile.DisplayName, UpdateSourceTrigger=PropertyChanged}" Padding="10" Margin="0,5,0,0" /></StackPanel>
-                                <StackPanel Grid.Column="1" Margin="8,0,0,0"><TextBlock Text="ユーザー名（任意）" FontWeight="SemiBold" /><TextBox Text="{Binding UsernameInput, UpdateSourceTrigger=PropertyChanged}" Padding="10" Margin="0,5,0,0" /></StackPanel>
+                                <StackPanel Grid.Column="0" Margin="0,0,8,0"><TextBlock Text="表示名" FontWeight="SemiBold" /><TextBox Text="{Binding SelectedProfile.DisplayName, UpdateSourceTrigger=PropertyChanged}" Padding="10" Margin="0,5,0,0" AutomationProperties.AutomationId="ProfileNameTextBox" AutomationProperties.Name="表示名" /></StackPanel>
+                                <StackPanel Grid.Column="1" Margin="8,0,0,0"><TextBlock Text="ユーザー名（任意）" FontWeight="SemiBold" /><TextBox Text="{Binding UsernameInput, UpdateSourceTrigger=PropertyChanged}" Padding="10" Margin="0,5,0,0" AutomationProperties.AutomationId="UsernameTextBox" AutomationProperties.Name="ユーザー名" /></StackPanel>
                             </Grid>
                             <TextBlock Text="パスワード（任意）" FontWeight="SemiBold" Margin="0,18,0,0" /><PasswordBox PasswordChanged="PasswordBox_OnPasswordChanged" Padding="10" Margin="0,5,0,0" />
                             <StackPanel Orientation="Horizontal" Margin="0,22,0,0"><Button Content="接続テスト" Command="{Binding TestConnectionCommand}" Style="{StaticResource SecondaryButton}" /><Button Content="設定を保存" Command="{Binding SaveSettingsCommand}" Style="{StaticResource PrimaryButton}" /></StackPanel>

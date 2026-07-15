@@ -18,7 +18,7 @@ internal sealed class NativeRendererWindow : IDisposable
             (int)(RendererWin32.WsExToolWindow | RendererWin32.WsExNoActivate),
             ClassName,
             null,
-            (int)RendererWin32.WsPopup,
+            unchecked((int)RendererWin32.WsPopup),
             0,
             0,
             1,
