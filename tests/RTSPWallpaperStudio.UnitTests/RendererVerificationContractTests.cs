@@ -44,4 +44,26 @@ public sealed class RendererVerificationContractTests
             Assert.InRange(position.Y, 0.05, 0.95);
         });
     }
+
+    [Fact]
+    public void ShellComposition_RequiresEveryDesktopSafetyGate()
+    {
+        var verified = new RendererShellCompositionMetrics(
+            RendererFramesVisibleOnDesktop: true,
+            DesktopIconHostLocated: true,
+            DesktopIconHostVisible: true,
+            DesktopIconsAboveRenderer: true,
+            TaskbarLocated: true,
+            TaskbarVisible: true,
+            TaskbarAboveRenderer: true,
+            RendererNotInAltTab: true,
+            RendererNotInTaskbar: true,
+            RendererDoesNotOwnForeground: true,
+            DesktopInputAvailable: true);
+
+        Assert.True(RendererShellCompositionContract.IsVerified(verified));
+        Assert.False(RendererShellCompositionContract.IsVerified(verified with { DesktopIconsAboveRenderer = false }));
+        Assert.False(RendererShellCompositionContract.IsVerified(verified with { TaskbarAboveRenderer = false }));
+        Assert.False(RendererShellCompositionContract.IsVerified(verified with { DesktopInputAvailable = false }));
+    }
 }

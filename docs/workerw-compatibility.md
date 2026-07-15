@@ -1,0 +1,15 @@
+# WorkerW互換性と安全なフォールバック
+
+Windowsの動画壁紙用に保証された公開Shell APIはありません。Explorerの構造は大型更新、マルチモニター、テーマ、仮想デスクトップで変わる可能性があります。
+
+実装では次の順で候補を扱います。
+
+1. 現在の`Progman`を取得する
+2. Progmanに属する可視`SHELLDLL_DefView`と`SysListView32`を優先して特定する
+3. Progman直下の可視・全画面`WorkerW`で、アイコンViewを持たないものを選ぶ
+4. WorkerWへRendererを非表示のまま`WS_CHILD`で接続する
+5. Shell合成を検証し、アイコンViewとタスクバーがRendererより前面であることを確認する
+
+RaisedDesktopは、`Progman`が`WS_EX_NOREDIRECTIONBITMAP`を持つShellでの互換候補です。候補を見つけただけで採用せず、Rendererのスタイル、Z順、タスクバー、入力、フォーカスを同じ検証に通します。条件を満たせなければRendererを表示せず、`WALLPAPER_SHELL_COMPOSITION_VALIDATION_FAILED`で停止します。
+
+Explorer再起動やディスプレイ変更後は、保存したHWNDを盲目的に再利用しません。既存ハンドルの有効性を再確認し、必要なら再探索・再アタッチします。Explorer自体を強制終了する処理は自動QAや通常の再接続には含めず、ユーザーのデスクトップ状態を破壊しない方針です。

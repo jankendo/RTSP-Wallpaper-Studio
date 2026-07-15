@@ -16,6 +16,7 @@ internal static class NativeMethods
     internal const uint VkF12 = 0x7B;
     internal const int SwHide = 0;
     internal const int SwShow = 5;
+    internal const int SwShowNoActivate = 4;
     internal const uint SendMessageTimeoutAbortIfHung = 0x0002;
     internal const uint SetWindowPosNoSize = 0x0001;
     internal const uint SetWindowPosNoMove = 0x0002;
@@ -34,6 +35,9 @@ internal static class NativeMethods
     internal const uint GwHwndOwner = 4;
     internal const uint GaParent = 1;
     internal const uint GaRoot = 2;
+    internal const uint GaRootOwner = 3;
+    internal const uint LvmGetItemCount = 0x1004;
+    internal const int MonitorDefaultToNearest = 2;
     internal const long WsPopup = 0x80000000L;
     internal const long WsChild = 0x40000000L;
     internal const long WsVisible = 0x10000000L;
@@ -41,6 +45,9 @@ internal static class NativeMethods
     internal const long WsClipSiblings = 0x04000000L;
     internal const long WsExToolWindow = 0x00000080L;
     internal const long WsExNoActivate = 0x08000000L;
+    internal const long WsExTopmost = 0x00000008L;
+    internal const long WsExAppWindow = 0x00040000L;
+    internal const long WsExLayered = 0x00080000L;
     internal const long WsExNoRedirectionBitmap = 0x00200000L;
 
     [StructLayout(LayoutKind.Sequential)]
@@ -140,6 +147,10 @@ internal static class NativeMethods
 
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool IsWindowEnabled(nint hwnd);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool IsWindow(nint hwnd);
 
     [DllImport("user32.dll", SetLastError = true)]
@@ -174,11 +185,35 @@ internal static class NativeMethods
     internal static extern bool GetClientRect(nint hwnd, out Rect rect);
 
     [DllImport("user32.dll", SetLastError = true)]
+    internal static extern nint WindowFromPoint(Point point);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern bool ScreenToClient(nint hwnd, ref Point point);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern nint SendMessage(nint hwnd, uint message, nuint wParam, nint lParam);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern nint GetForegroundWindow();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern nint GetActiveWindow();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern nint GetFocus();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern nint MonitorFromWindow(nint hwnd, uint flags);
+
+    [DllImport("user32.dll", SetLastError = true)]
     internal static extern int MapWindowPoints(nint from, nint to, ref Point point, uint points);
 
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool ShowWindow(nint hwnd, int command);
+
+    [DllImport("dwmapi.dll", SetLastError = true)]
+    internal static extern int DwmGetWindowAttribute(nint hwnd, uint attribute, out int value, int valueSize);
 
     [DllImport("user32.dll", EntryPoint = "RegisterWindowMessageW", CharSet = CharSet.Unicode)]
     internal static extern uint RegisterWindowMessage(string message);

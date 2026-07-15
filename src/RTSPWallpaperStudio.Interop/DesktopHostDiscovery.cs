@@ -34,16 +34,23 @@ public sealed class DesktopHostDiscovery
             return Failure(DesktopLayoutStrategy.Unknown, "DESKTOP_PROGMAN_NOT_FOUND", "Progmanが見つかりません。", 0);
         }
 
-        var raised = _raised.DiscoverExisting(progman);
-        if (raised.Success)
-        {
-            return WithCandidateDiagnostics(raised);
-        }
-
+        // Prefer the real shell-owned WorkerW surface. On the current Windows 11
+        // shell the Progman child WorkerW (sibling of SHELLDLL_DefView) is the
+        // only route that keeps icons in front of the renderer. A top-level
+        // RaisedDesktop window can be visible while still covering the icon host.
         var legacy = _legacy.DiscoverExisting(progman);
         if (legacy.Success)
         {
             return WithCandidateDiagnostics(legacy);
+        }
+
+        // RaisedDesktop remains a compatibility candidate, but its shell
+        // composition is validated after attach. It must never be accepted
+        // solely because a non-black desktop pixel was observed.
+        var raised = _raised.DiscoverExisting(progman);
+        if (raised.Success)
+        {
+            return WithCandidateDiagnostics(raised);
         }
 
         return WithCandidateDiagnostics(Failure(
@@ -54,16 +61,27 @@ public sealed class DesktopHostDiscovery
             $"RaisedDesktop: {raised.Diagnostic}; LegacyWorkerW: {legacy.Diagnostic}"));
     }
 
-    internal static nint FindShellView(out nint iconHost)
+    internal static nint FindShellView(nint progman, out nint iconHost)
     {
         nint foundIconHost = 0;
         nint shellView = 0;
+
+        // Prefer the shell view that is actually owned by this session's
+        // Progman. A global EnumWindows scan can encounter stale or hidden
+        // SHELLDLL_DefView windows from another shell surface first.
+        var direct = NativeMethods.FindWindowEx(progman, 0, "SHELLDLL_DefView", null);
+        if (direct != 0 && NativeMethods.IsWindowVisible(direct))
+        {
+            iconHost = progman;
+            return direct;
+        }
+
         NativeMethods.EnumWindows((window, _) =>
         {
-            var direct = NativeMethods.FindWindowEx(window, 0, "SHELLDLL_DefView", null);
-            if (direct != 0)
+            var windowShellView = NativeMethods.FindWindowEx(window, 0, "SHELLDLL_DefView", null);
+            if (windowShellView != 0 && NativeMethods.IsWindowVisible(windowShellView))
             {
-                shellView = direct;
+                shellView = windowShellView;
                 foundIconHost = window;
                 return false;
             }
@@ -75,15 +93,21 @@ public sealed class DesktopHostDiscovery
                     return true;
                 }
 
-                shellView = child;
-                foundIconHost = window;
-                return false;
+                if (NativeMethods.IsWindowVisible(child))
+                {
+                    shellView = child;
+                    foundIconHost = NativeMethods.GetParent(child);
+                    return false;
+                }
+                return true;
             }, 0);
             return shellView == 0;
         }, 0);
         iconHost = foundIconHost;
         return shellView;
     }
+
+    internal static nint FindShellView(out nint iconHost) => FindShellView(NativeMethods.FindWindow("Progman", null), out iconHost);
 
     internal static bool IsForbiddenHost(nint hwnd)
     {

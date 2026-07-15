@@ -20,6 +20,7 @@ internal static class Program
         {
             Console.WriteLine("Usage: RTSPWallpaperStudio.Diagnostics.exe --url <rtsp-url> [--transport tcp|udp|automatic] [--timeout 10] [--cache 300] [--start-go2rtc] [--wallpaper|--wallpaper-only] [--render-test-pattern] [--desktop-probe] [--hold-seconds 30] [--ipc-smoke]");
             Console.WriteLine("       RTSPWallpaperStudio.Diagnostics.exe --probe-hwnd <hex-or-decimal-hwnd> [--probe-seconds 1]");
+            Console.WriteLine("       RTSPWallpaperStudio.Diagnostics.exe --shell-probe [--shell-probe-output <path>]");
             Console.WriteLine("       RTSPWallpaperStudio.Diagnostics.exe --startup-status");
             Console.WriteLine("       RTSPWallpaperStudio.Diagnostics.exe --startup-enable [--startup-exe <RTSPWallpaperStudio.App.exe>]");
             Console.WriteLine("       RTSPWallpaperStudio.Diagnostics.exe --startup-disable");
@@ -43,6 +44,11 @@ internal static class Program
         if (options.ProbeHwnd is not null)
         {
             return await RunDesktopProbeAsync(options);
+        }
+
+        if (options.ShellProbe)
+        {
+            return RunShellProbe(options);
         }
 
         if (options.Wallpaper || options.IpcSmoke)
@@ -173,6 +179,8 @@ internal static class Program
         var ipcSmoke = false;
         var desktopProbe = false;
         nint? probeHwnd = null;
+        var shellProbe = false;
+        string? shellProbeOutput = null;
         var probeSeconds = 1;
         var holdSeconds = 0;
         string? startupAction = null;
@@ -195,6 +203,8 @@ internal static class Program
                 case "--render-test-pattern": renderTestPattern = true; wallpaper = true; wallpaperOnly = true; break;
                 case "--ipc-smoke": ipcSmoke = true; break;
                 case "--desktop-probe": desktopProbe = true; break;
+                case "--shell-probe": shellProbe = true; break;
+                case "--shell-probe-output": shellProbeOutput = args[++i]; break;
                 case "--probe-hwnd":
                     var hwndText = args[++i];
                     probeHwnd = (nint)(hwndText.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
@@ -215,7 +225,7 @@ internal static class Program
         }
 
         return new DiagnosticOptions(url, user, password, transport, timeout, cache, hardware, startGo2Rtc, renderTestPattern, wallpaper, wallpaperOnly, ipcSmoke,
-            desktopProbe, probeHwnd, probeSeconds, holdSeconds, startupAction, startupExecutable, createDiagnosticsPackage, help);
+            desktopProbe, probeHwnd, probeSeconds, holdSeconds, startupAction, startupExecutable, createDiagnosticsPackage, shellProbe, shellProbeOutput, help);
     }
 
     private static int RunStartupCommand(DiagnosticOptions options)
@@ -231,6 +241,41 @@ internal static class Program
         var result = service.SetEnabled(options.StartupAction == "enable", options.StartupExecutable);
         Console.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
         return result.Success ? 0 : 21;
+    }
+
+    private static int RunShellProbe(DiagnosticOptions options)
+    {
+        var discovery = new DesktopHostDiscovery().DiscoverExisting();
+        var capture = DesktopShellCompositionProbe.Capture(discovery, 0, false);
+        var payload = new
+        {
+            capturedAt = DateTimeOffset.UtcNow,
+            discovery = new
+            {
+                discovery.Success,
+                strategy = discovery.Strategy.ToString(),
+                progmanHwnd = discovery.ProgmanHwnd.ToInt64(),
+                hostHwnd = discovery.HostHwnd.ToInt64(),
+                shellViewHwnd = discovery.ShellViewHwnd.ToInt64(),
+                iconHostHwnd = discovery.IconHostHwnd.ToInt64(),
+                discovery.ExplorerProcessId,
+                discovery.Diagnostic
+            },
+            composition = capture.Metrics,
+            windows = capture.Windows,
+            capture.Diagnostic
+        };
+        var json = JsonSerializer.Serialize(payload, JsonOptions);
+        Console.WriteLine(json);
+        if (!string.IsNullOrWhiteSpace(options.ShellProbeOutput))
+        {
+            var path = Path.GetFullPath(options.ShellProbeOutput);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, json);
+            Console.Error.WriteLine($"SHELL_PROBE_OUTPUT={path}");
+        }
+
+        return discovery.Success ? 0 : 32;
     }
 
     private static async Task<int> RunDesktopProbeAsync(DiagnosticOptions options)
@@ -414,5 +459,6 @@ internal static class Program
 
     private sealed record DiagnosticOptions(string Url, string? UserName, string? Password, TransportMode Transport,
         int TimeoutSeconds, int CacheMs, HardwareDecodeMode HardwareDecode, bool StartGo2Rtc, bool RenderTestPattern, bool Wallpaper, bool WallpaperOnly, bool IpcSmoke,
-        bool DesktopProbe, nint? ProbeHwnd, int ProbeSeconds, int HoldSeconds, string? StartupAction, string? StartupExecutable, bool CreateDiagnosticsPackage, bool ShowHelp);
+        bool DesktopProbe, nint? ProbeHwnd, int ProbeSeconds, int HoldSeconds, string? StartupAction, string? StartupExecutable, bool CreateDiagnosticsPackage,
+        bool ShellProbe, string? ShellProbeOutput, bool ShowHelp);
 }

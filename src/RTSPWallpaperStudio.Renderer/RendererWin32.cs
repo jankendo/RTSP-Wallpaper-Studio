@@ -9,6 +9,7 @@ internal static class RendererWin32
     internal const int GwlexStyle = -20;
     internal const int SwHide = 0;
     internal const int SwShow = 5;
+    internal const int SwShowNoActivate = 4;
     internal const uint SwpNoActivate = 0x0010;
     internal const uint SwpNoZOrder = 0x0004;
     internal const uint SwpFrameChanged = 0x0020;

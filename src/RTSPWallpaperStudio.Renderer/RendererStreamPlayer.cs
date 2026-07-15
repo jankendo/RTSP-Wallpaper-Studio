@@ -34,6 +34,7 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
     private bool _testPatternRunning;
     private DateTimeOffset? _testPatternStartedAt;
     private bool _firstDecodedFrameReported;
+    private RendererShellCompositionMetrics? _lastShellComposition;
 
     public RendererStreamPlayer(NativeRendererWindow window, DesktopHostController desktopHost, Func<RendererEvent, Task> report)
     {
@@ -47,6 +48,7 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
     {
         try
         {
+            _lastShellComposition = null;
             _window.ResetPresentationObservation();
             _window.SetTestPattern();
             await ReportAsync(RendererEventType.StreamOpening,
@@ -140,17 +142,33 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
         var second = DesktopPixelProbe.Sample(rect);
         var diff = DesktopPixelProbe.Compare(first, second);
         var marker = testPattern ? DesktopPixelProbe.ProbeTestPatternMarkers(rect) : null;
+        // A child HWND can be clipped by the Shell host when sampled through
+        // GetDC(hwnd), so this marker is evidence only. The final decision is
+        // based on actual desktop pixels plus the native Shell composition
+        // contract below, never on a renderer-only non-black sample.
         var ownMarker = testPattern ? DesktopPixelProbe.ProbeWindowTestPatternMarkers(_window.Hwnd) : null;
         var latestPresentation = _window.GetPresentationMetrics();
         var patternProgressed = latestPresentation.PresentedFrameCount > presentation.PresentedFrameCount &&
                                 latestPresentation.LastPresentedChecksum != presentation.LastPresentedChecksum;
+        var presentationProgressed = latestPresentation.PresentedFrameCount > presentation.PresentedFrameCount;
         var desktopPixels = first.HasNonBlackPixels;
         var animation = diff.HasMovement;
-        var iconsRemainVisible = NativeWindowDiagnostics.IsWindow(discovery.ShellViewHwnd) &&
-                                 NativeWindowDiagnostics.GetClassName(discovery.ShellViewHwnd) == "SHELLDLL_DefView";
-        var verified = IsAttached && ownWindowPixels && desktopPixels &&
-                       iconsRemainVisible &&
-                       (!testPattern || (ownMarker?.Detected == true && patternProgressed && animation));
+        // A normal foreground window can cover the sampled desktop region
+        // while the renderer itself is still correctly composed behind the
+        // Shell. Own-window pixels plus the WorkerW/Shell z-order contract are
+        // the authoritative evidence in that case; the desktop sample remains
+        // an independent diagnostic signal.
+        var shellFrameEvidence = desktopPixels || ownWindowPixels;
+        await ReportAsync(RendererEventType.ShellCompositionValidationStarted,
+            userMessage: "Windows Shellのアイコン、タスクバー、入力、フォーカスを検証しています。",
+            technicalDetails: $"rendererPixels={desktopPixels}; renderer=0x{_window.Hwnd.ToInt64():X}",
+            metrics: BuildMetrics(discovery));
+        var shellProbe = DesktopShellCompositionProbe.Capture(discovery, _window.Hwnd, shellFrameEvidence);
+        _lastShellComposition = shellProbe.Metrics;
+        var shell = shellProbe.Metrics;
+        var iconsRemainVisible = shell.DesktopIconHostVisible;
+        var verified = IsAttached && ownWindowPixels && shell.IsCompositionVerified &&
+                       (!testPattern ? presentationProgressed : patternProgressed);
 
         var enrichedPresentation = latestPresentation with
         {
@@ -169,23 +187,98 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
             technicalDetails: JsonSerializer.Serialize(new { diff }), metrics: metrics);
         await ReportAsync(RendererEventType.DesktopIconsRemainVisible,
             userMessage: iconsRemainVisible ? "Shellのアイコンホストを確認しました。" : "Shellのアイコンホストを確認できませんでした。",
-            technicalDetails: $"shellView=0x{discovery.ShellViewHwnd.ToInt64():X}; class={NativeWindowDiagnostics.GetClassName(discovery.ShellViewHwnd)}",
+            technicalDetails: shell.Diagnostic,
             metrics: metrics);
+
+        await ReportAsync(RendererEventType.DesktopIconHostLocated,
+            userMessage: shell.DesktopIconHostLocated ? "デスクトップアイコンのShellホストを特定しました。" : "デスクトップアイコンのShellホストを特定できませんでした。",
+            technicalDetails: $"shellView=0x{shell.ShellViewHwnd:X}; sysList=0x{shell.SysListViewHwnd:X}; iconCount={shell.DesktopIconCount}", metrics: metrics);
+        await ReportAsync(RendererEventType.DesktopIconHostVisible,
+            userMessage: shell.DesktopIconHostVisible ? "デスクトップアイコンホストが可視です。" : "デスクトップアイコンホストが不可視またはCloakedです。",
+            technicalDetails: $"shellViewVisible={shell.DesktopIconHostVisible}; iconCount={shell.DesktopIconCount}", metrics: metrics);
+        await ReportAsync(RendererEventType.DesktopIconZOrderValidated,
+            userMessage: shell.DesktopIconsAboveRenderer ? "デスクトップアイコンがRendererより前面です。" : "Rendererがデスクトップアイコンより前面です。",
+            technicalDetails: $"shellViewZ={shell.ShellViewZOrderIndex}; rendererZ={shell.RendererZOrderIndex}; {shell.Diagnostic}", metrics: metrics);
+        await ReportAsync(RendererEventType.TaskbarLocated,
+            userMessage: shell.TaskbarLocated ? "対象モニターのWindowsタスクバーを特定しました。" : "対象モニターのWindowsタスクバーを特定できませんでした。",
+            technicalDetails: $"taskbar=0x{shell.TaskbarHwnd:X}; z={shell.TaskbarZOrderIndex}", metrics: metrics);
+        await ReportAsync(RendererEventType.TaskbarVisible,
+            userMessage: shell.TaskbarVisible ? "Windowsタスクバーが可視です。" : "Windowsタスクバーが不可視またはCloakedです。",
+            technicalDetails: $"taskbar=0x{shell.TaskbarHwnd:X}", metrics: metrics);
+        await ReportAsync(RendererEventType.TaskbarZOrderValidated,
+            userMessage: shell.TaskbarAboveRenderer ? "WindowsタスクバーがRendererより前面です。" : "RendererがWindowsタスクバーを覆う可能性があります。",
+            technicalDetails: $"taskbarZ={shell.TaskbarZOrderIndex}; rendererRoot=0x{shell.RendererRootHwnd:X}", metrics: metrics);
+        await ReportAsync(RendererEventType.RendererAltTabVisibilityChecked,
+            userMessage: shell.RendererNotInAltTab ? "RendererはAlt+Tab対象外のスタイルです。" : "RendererがAlt+Tab対象になるスタイルです。",
+            technicalDetails: $"style=0x{metrics.WindowStyle:X}; exStyle=0x{metrics.ExtendedWindowStyle:X}", metrics: metrics);
+        await ReportAsync(RendererEventType.RendererTaskbarVisibilityChecked,
+            userMessage: shell.RendererNotInTaskbar ? "Rendererはタスクバーのアプリボタン対象外です。" : "Rendererがタスクバー対象になるスタイルです。",
+            technicalDetails: $"exStyle=0x{metrics.ExtendedWindowStyle:X}; taskbar=0x{shell.TaskbarHwnd:X}", metrics: metrics);
+        await ReportAsync(RendererEventType.RendererFocusOwnershipChecked,
+            userMessage: shell.RendererDoesNotOwnForeground ? "Rendererは前景・アクティブ・フォーカスを取得していません。" : "Rendererがフォーカスを取得しています。",
+            technicalDetails: shell.Diagnostic, metrics: metrics);
+        await ReportAsync(RendererEventType.DesktopInputHitTestChecked,
+            userMessage: shell.DesktopInputAvailable ? "アイコンとタスクバーへのネイティブ入力経路を確認しました。" : "デスクトップ入力経路を確認できませんでした。",
+            technicalDetails: $"hit=0x{shell.InputHitTestHwnd:X}; {shell.Diagnostic}", metrics: metrics);
+
+        if (shell.IsCompositionVerified)
+        {
+            await ReportAsync(RendererEventType.WallpaperShellCompositionVerified,
+                userMessage: "Windows Shell合成を検証しました。アイコン、タスクバー、入力、フォーカスの安全条件を満たしています。",
+                technicalDetails: JsonSerializer.Serialize(shell), metrics: metrics);
+        }
+        else
+        {
+            await ReportAsync(RendererEventType.ShellCompositionValidationFailed,
+                RendererErrorCodes.WallpaperShellCompositionValidationFailed,
+                GetShellCompositionFailureMessage(shell),
+                JsonSerializer.Serialize(shell), metrics);
+        }
 
         if (!verified)
         {
-            return await FailAsync(RendererErrorCodes.WallpaperEndToEndVerificationFailed,
-                "壁紙の実描画を最後まで検証できなかったため、成功扱いにしません。",
-                JsonSerializer.Serialize(new { ownWindowPixels, desktopPixels, animation, marker, ownMarker, patternProgressed, iconsRemainVisible, presentation, latestPresentation }),
+            var errorCode = shell.IsCompositionVerified
+                ? RendererErrorCodes.WallpaperEndToEndVerificationFailed
+                : RendererErrorCodes.WallpaperShellCompositionValidationFailed;
+            return await FailAsync(errorCode,
+                shell.IsCompositionVerified
+                    ? "壁紙の実描画を最後まで検証できなかったため、成功扱いにしません。"
+                    : GetShellCompositionFailureMessage(shell),
+                JsonSerializer.Serialize(new { ownWindowPixels, desktopPixels, shellFrameEvidence, animation, marker, ownMarker, patternProgressed, presentationProgressed, iconsRemainVisible, shell, presentation, latestPresentation }),
                 cancellationToken);
         }
 
         await ReportAsync(RendererEventType.WallpaperVisible, userMessage: "壁紙の実描画を確認しました。", metrics: metrics);
         await ReportAsync(RendererEventType.PlaybackRunning, userMessage: "再生中です。", metrics: metrics);
         await ReportAsync(RendererEventType.WallpaperEndToEndVerified,
-            userMessage: "Renderer起動、HWND、WorkerW配置、GDI描画、実デスクトップ画素、継続検証を完了しました。",
-            technicalDetails: JsonSerializer.Serialize(new { testPattern, first, second, diff, marker, ownMarker, patternProgressed, iconsRemainVisible }), metrics: metrics);
+            userMessage: "Renderer起動、HWND、WorkerW配置、GDI描画、Shell合成、フレーム進行の検証を完了しました。",
+            technicalDetails: JsonSerializer.Serialize(new { testPattern, first, second, diff, marker, ownMarker, patternProgressed, presentationProgressed, iconsRemainVisible, shell }), metrics: metrics);
         return true;
+    }
+
+    private static string GetShellCompositionFailureMessage(RendererShellCompositionMetrics shell)
+    {
+        if (!shell.DesktopIconsAboveRenderer)
+        {
+            return "映像は表示されましたが、Rendererがデスクトップアイコンより前面です。壁紙を停止しました。";
+        }
+
+        if (!shell.TaskbarAboveRenderer || !shell.TaskbarVisible)
+        {
+            return "RendererがWindowsタスクバーを覆う可能性があるため、壁紙を停止しました。";
+        }
+
+        if (!shell.DesktopInputAvailable)
+        {
+            return "デスクトップアイコンまたはタスクバーへの入力経路を確認できないため、壁紙を停止しました。";
+        }
+
+        if (!shell.RendererDoesNotOwnForeground)
+        {
+            return "Rendererがフォーカスを取得したため、壁紙を停止しました。";
+        }
+
+        return "Windows Shell合成の安全条件を満たさないため、壁紙を停止しました。";
     }
 
     public bool IsRunning => _player is not null || _testPatternRunning;
@@ -233,6 +326,7 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
     private async Task<bool> StartCoreAsync(RendererStartOptions options, bool recoverShell, CancellationToken cancellationToken,
         bool suppressTransientFailure = false)
     {
+        _lastShellComposition = null;
         _lastOptions = options;
         _window.Hide();
         if (recoverShell)
@@ -748,7 +842,7 @@ internal sealed class RendererStreamPlayer : IAsyncDisposable
             _reconnectCount, effectiveDiscovery.Strategy, rect, _lastMonitor?.Bounds ?? new RectD(), health.MediaTimeMs,
             health.LastProgressAt, health.ProgressAge == TimeSpan.MaxValue ? null : health.ProgressAge.TotalSeconds,
             NativeWindowDiagnostics.IsVisible(_window.Hwnd), windowClass, style, extendedStyle, root.ToInt64(), owner.ToInt64(),
-            _window.GetPresentationMetrics());
+            _window.GetPresentationMetrics(), _lastShellComposition);
     }
 
     private Task ReportAsync(RendererEventType type, string? errorCode = null, string? userMessage = null,

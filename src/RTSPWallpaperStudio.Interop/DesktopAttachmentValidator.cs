@@ -38,6 +38,16 @@ public static class DesktopAttachmentValidator
             return false;
         }
 
+        var extendedStyle = NativeMethods.GetWindowLongPtr(rendererHwnd, NativeMethods.GwlexStyle).ToInt64();
+        var forbiddenTopLevelBits = NativeMethods.WsExTopmost | NativeMethods.WsExAppWindow;
+        if ((extendedStyle & forbiddenTopLevelBits) != 0 ||
+            (extendedStyle & (NativeMethods.WsExToolWindow | NativeMethods.WsExNoActivate)) !=
+            (NativeMethods.WsExToolWindow | NativeMethods.WsExNoActivate))
+        {
+            diagnostic = $"Renderer拡張スタイルが安全契約に違反しています。exStyle=0x{extendedStyle:X}; topmost/appwindowは禁止、toolwindow/noactivateが必須です。";
+            return false;
+        }
+
         if (raisedDesktop && NativeMethods.GetWindow(rendererHwnd, NativeMethods.GwHwndOwner) != 0)
         {
             diagnostic = "Raised DesktopのトップレベルRendererにOwnerが設定されています。";
@@ -45,6 +55,14 @@ public static class DesktopAttachmentValidator
         }
 
         var parentClass = NativeMethods.GetClassNameSafe(actualParent);
+        if (!raisedDesktop &&
+            (!parentClass.Equals("WorkerW", StringComparison.Ordinal) ||
+             NativeMethods.GetParent(actualParent) != discovery.ProgmanHwnd ||
+             !NativeMethods.IsWindowVisible(actualParent)))
+        {
+            diagnostic = $"Legacy WorkerWの親契約が不正です。parent=0x{actualParent.ToInt64():X}; class={parentClass}; progman=0x{discovery.ProgmanHwnd.ToInt64():X}";
+            return false;
+        }
         if (DesktopHostDiscovery.IsForbiddenHost(actualParent) ||
             parentClass.Equals("SHELLDLL_DefView", StringComparison.Ordinal) ||
             parentClass.Equals("SysListView32", StringComparison.Ordinal))

@@ -128,7 +128,7 @@ internal sealed class NativeRendererWindow : IDisposable
     public void ShowAfterValidation()
     {
         EnsureNotDisposed();
-        RendererWin32.ShowWindow(Hwnd, RendererWin32.SwShow);
+        RendererWin32.ShowWindow(Hwnd, RendererWin32.SwShowNoActivate);
         RendererWin32.UpdateWindow(Hwnd);
     }
 

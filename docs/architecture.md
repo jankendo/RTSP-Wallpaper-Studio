@@ -24,7 +24,7 @@ RendererはCPU読取可能なRV32フレームを受け取り、デコード済�
 
 `DesktopHostDiscovery`はまず既存構造を読み取り、必要なときだけ明示的な復旧操作でShellの0x052C通知を送ります。候補は`LegacyWorkerWStrategy`と`RaisedDesktopStrategy`に分離し、Progman/SHELLDLL_DefView/WorkerWの階層を検査します。タスクバーやアイコンViewへ誤って親子付けしない禁止リストもあります。
 
-`DesktopAttachmentTransaction`はRendererを非表示のまま、スタイル変更、`SetParent`後の実親、スクリーン座標から親座標への変換、矩形、Z順を検証します。どれか一つでも失敗するとスナップショットへロールバックし、ロールバック自体に失敗した場合はRenderer HWNDを破棄します。`WallpaperVisible`はこの検証完了後だけ発行されます。
+`DesktopAttachmentTransaction`はRendererを非表示のまま、スタイル変更、`SetParent`後の実親、スクリーン座標から親座標への変換、矩形を検証します。続く`DesktopShellCompositionProbe`がSHELLDLL_DefView/SysListView32、WorkerW、全対象モニターのタスクバーの可視性とZ順、Alt+Tab/タスクバー除外、フォーカス、`WindowFromPoint`を確認します。どれか一つでも失敗するとスナップショットへロールバックし、ロールバック自体に失敗した場合はRenderer HWNDを破棄します。`WallpaperVisible`と`WallpaperEndToEndVerified`は`WallpaperShellCompositionVerified`の後だけ発行されます。
 
 ## IPCとプロセス境界
 

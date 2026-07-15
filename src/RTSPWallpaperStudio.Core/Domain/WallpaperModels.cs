@@ -212,7 +212,20 @@ public enum RendererEventType
     RtspFrameCopiedToBackBuffer,
     RtspFramePaintRequested,
     RtspFramePresented,
-    WallpaperEndToEndVerified
+    WallpaperEndToEndVerified,
+    ShellCompositionValidationStarted,
+    DesktopIconHostLocated,
+    DesktopIconHostVisible,
+    DesktopIconZOrderValidated,
+    TaskbarLocated,
+    TaskbarVisible,
+    TaskbarZOrderValidated,
+    RendererAltTabVisibilityChecked,
+    RendererTaskbarVisibilityChecked,
+    RendererFocusOwnershipChecked,
+    DesktopInputHitTestChecked,
+    WallpaperShellCompositionVerified,
+    ShellCompositionValidationFailed
 }
 
 public static class RendererErrorCodes
@@ -239,6 +252,7 @@ public static class RendererErrorCodes
     public const string WallpaperZOrderValidationFailed = "WALLPAPER_ZORDER_VALIDATION_FAILED";
     public const string WallpaperPresentationFailed = "WALLPAPER_PRESENTATION_FAILED";
     public const string WallpaperEndToEndVerificationFailed = "WALLPAPER_END_TO_END_VERIFICATION_FAILED";
+    public const string WallpaperShellCompositionValidationFailed = "WALLPAPER_SHELL_COMPOSITION_VALIDATION_FAILED";
     public const string ExplorerReattachFailed = "EXPLORER_REATTACH_FAILED";
     public const string RendererCrashLoop = "RENDERER_CRASH_LOOP";
 }
@@ -266,7 +280,52 @@ public sealed record RendererMetrics(
     long ExtendedWindowStyle = 0,
     long RootHwnd = 0,
     long OwnerHwnd = 0,
-    RendererPresentationMetrics? Presentation = null);
+    RendererPresentationMetrics? Presentation = null,
+    RendererShellCompositionMetrics? ShellComposition = null);
+
+public sealed record RendererShellCompositionMetrics(
+    bool RendererFramesVisibleOnDesktop = false,
+    bool DesktopIconHostLocated = false,
+    bool DesktopIconHostVisible = false,
+    bool DesktopIconsAboveRenderer = false,
+    bool TaskbarLocated = false,
+    bool TaskbarVisible = false,
+    bool TaskbarAboveRenderer = false,
+    bool RendererNotInAltTab = false,
+    bool RendererNotInTaskbar = false,
+    bool RendererDoesNotOwnForeground = false,
+    bool DesktopInputAvailable = false,
+    bool IsCompositionVerified = false,
+    long RendererHwnd = 0,
+    long RendererParentHwnd = 0,
+    long RendererRootHwnd = 0,
+    long ShellHostHwnd = 0,
+    long ShellViewHwnd = 0,
+    long SysListViewHwnd = 0,
+    long TaskbarHwnd = 0,
+    long InputHitTestHwnd = 0,
+    int DesktopIconCount = 0,
+    long RendererZOrderIndex = -1,
+    long ShellViewZOrderIndex = -1,
+    long SysListViewZOrderIndex = -1,
+    long TaskbarZOrderIndex = -1,
+    string? Diagnostic = null);
+
+public static class RendererShellCompositionContract
+{
+    public static bool IsVerified(RendererShellCompositionMetrics value) =>
+        value.RendererFramesVisibleOnDesktop &&
+        value.DesktopIconHostLocated &&
+        value.DesktopIconHostVisible &&
+        value.DesktopIconsAboveRenderer &&
+        value.TaskbarLocated &&
+        value.TaskbarVisible &&
+        value.TaskbarAboveRenderer &&
+        value.RendererNotInAltTab &&
+        value.RendererNotInTaskbar &&
+        value.RendererDoesNotOwnForeground &&
+        value.DesktopInputAvailable;
+}
 
 public sealed record RendererPresentationMetrics(
     long DecodedFrameCount = 0,

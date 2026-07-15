@@ -22,9 +22,9 @@ dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.D
 dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.Diagnostics.csproj -c Release -p:Platform=x64 -- --url rtsp://127.0.0.1:8555/test --transport tcp --wallpaper-only --desktop-probe --hold-seconds 30
 dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.Diagnostics.csproj -c Release -p:Platform=x64 -- --render-test-pattern --wallpaper-only --desktop-probe --hold-seconds 3
 
-`WALLPAPER_RESULT=SUCCESS` は `WallpaperVisible` だけでは発行されません。Raised Desktop/WorkerWの親子関係、GDI実描画、実デスクトップDCの画素、内蔵パターンの継続更新を含む `WallpaperEndToEndVerified` が必要です。Computer Useを使わない場合も、上記CLIで同じWin32経路を自動検証できます。
+`WALLPAPER_RESULT=SUCCESS` は `WallpaperVisible` だけでは発行されません。WorkerW/ShellViewの親子関係、GDI実描画、Rendererのフレーム進行、アイコン・タスクバーのZ順、Alt+Tab/タスクバー対象外、フォーカス非取得、Rendererが入力を奪っていないことを含む `WallpaperShellCompositionVerified` の後に `WallpaperEndToEndVerified` が必要です。Computer Useやショートカット入力を使わない場合も、上記CLIで同じWin32経路を自動検証できます。
 ```
 
-`--wallpaper-only` は接続テストを省略し、アプリの「壁紙に設定」相当のRenderer直接起動を検証します。配信元を停止した状態で起動し、数秒後に再開することで、初回再試行をGUIなしで確認できます。`--desktop-probe` は `WallpaperVisible` 後の実デスクトップDCをサンプリングし、非黒画素と時間差の変化を出力します。GUIで既に表示中のHWNDは `--probe-hwnd 0x... --probe-seconds 2` で同じ親・矩形・画素検証ができます。
+`--wallpaper-only` は接続テストを省略し、アプリの「壁紙に設定」相当のRenderer直接起動を検証します。配信元を停止した状態で起動し、数秒後に再開することで、初回再試行をGUIなしで確認できます。`--desktop-probe` は `WallpaperVisible` 後の実デスクトップDCをサンプリングし、非黒画素と時間差の変化を出力します。`--shell-probe --shell-probe-output artifacts\qa\shell-hierarchy-before.json` はExplorerのProgman/WorkerW/SHELLDLL_DefView/SysListView32/タスクバーを読み取り専用でJSON保存します。GUIで既に表示中のHWNDは `--probe-hwnd 0x... --probe-seconds 2` で同じ親・矩形・画素検証ができます。
 
 実機ストリームがない場合は、`tools/start-test-rtsp.ps1`が既存RTSP、Docker MediaMTX、FFmpegを順番に確認し、準備できない場合は明示的にスキップします。

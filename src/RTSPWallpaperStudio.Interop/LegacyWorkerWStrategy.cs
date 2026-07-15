@@ -15,7 +15,7 @@ public sealed class LegacyWorkerWStrategy : IDesktopHostStrategy
             return DesktopHostDiscovery.Failure(Strategy, RendererErrorCodes.DesktopProgmanNotFound, "Progmanが見つかりません。", 0);
         }
 
-        var shellView = DesktopHostDiscovery.FindShellView(out var iconHost);
+        var shellView = DesktopHostDiscovery.FindShellView(progman, out var iconHost);
         if (shellView == 0 || iconHost == 0)
         {
             return DesktopHostDiscovery.Failure(Strategy, RendererErrorCodes.DesktopShellViewNotFound, "SHELLDLL_DefViewが見つかりません。", 0);

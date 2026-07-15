@@ -150,12 +150,39 @@ public static class DesktopPixelProbe
         {
             for (var i = 0; i < positions.Count; i++)
             {
-                var x = (int)Math.Round(rect.X + rect.Width * positions[i].Item1);
-                var y = (int)Math.Round(rect.Y + rect.Height * positions[i].Item2);
-                var colorRef = GetPixel(screenDc, x, y);
-                var rgb = (uint)(((colorRef & 0xFF) << 16) | (colorRef & 0xFF00) | ((colorRef >> 16) & 0xFF));
-                colors.Add(rgb);
-                if (ColorDistance(rgb, expected[i]) <= 75)
+                var centerX = rect.X + rect.Width * positions[i].Item1;
+                var centerY = rect.Y + rect.Height * positions[i].Item2;
+                var bestColor = 0u;
+                var bestDistance = int.MaxValue;
+                var markerMatched = false;
+                // The Shell icon view is a transparent child in the normal
+                // layout, but icon labels can cover the exact center sample.
+                // Search a small area inside the deterministic marker instead
+                // of treating one covered pixel as a failed presentation.
+                for (var sampleY = -2; sampleY <= 2; sampleY++)
+                {
+                    for (var sampleX = -2; sampleX <= 2; sampleX++)
+                    {
+                        var x = (int)Math.Round(centerX + rect.Width * sampleX * 0.012);
+                        var y = (int)Math.Round(centerY + rect.Height * sampleY * 0.012);
+                        var colorRef = GetPixel(screenDc, x, y);
+                        var rgb = (uint)(((colorRef & 0xFF) << 16) | (colorRef & 0xFF00) | ((colorRef >> 16) & 0xFF));
+                        var distance = ColorDistance(rgb, expected[i]);
+                        if (distance < bestDistance)
+                        {
+                            bestDistance = distance;
+                            bestColor = rgb;
+                        }
+
+                        if (distance <= 75)
+                        {
+                            markerMatched = true;
+                        }
+                    }
+                }
+
+                colors.Add(bestColor);
+                if (markerMatched)
                 {
                     matched++;
                 }

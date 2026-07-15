@@ -106,6 +106,9 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private string _playbackHealth = "映像ヘルスを待機しています。";
 
+    [ObservableProperty]
+    private string _shellCompositionStatus = "Windows Shell合成検証を待機しています。";
+
     public MainViewModel(
         JsonSettingsStore settingsStore,
         ProtectedSecretStore secretStore,
@@ -482,7 +485,7 @@ public partial class MainViewModel : ObservableObject
                 HardwareDecodeMode.Disabled,
                 true,
                 true));
-            StatusMessage = "壁紙描画セルフテストを実行中です。HWND、Raised Desktop、GDI、実画素を検証します。";
+            StatusMessage = "壁紙描画セルフテストを実行中です。HWND、WorkerW、Shell合成、GDI、実画素を検証します。";
             FooterMessage = "成功表示はWallpaperEndToEndVerifiedイベント受信後だけに更新されます。";
         }
         catch (Exception ex)
@@ -607,6 +610,14 @@ public partial class MainViewModel : ObservableObject
         {
             _lastRendererMetrics = eventMetrics;
         }
+        if (rendererEvent.Type == RendererEventType.ShellCompositionValidationStarted)
+        {
+            ShellCompositionStatus = "検証中：デスクトップアイコン、タスクバー、入力、フォーカスを確認しています。";
+        }
+        else if (rendererEvent.Metrics?.ShellComposition is { } shell)
+        {
+            ShellCompositionStatus = FormatShellCompositionStatus(shell);
+        }
         UpdatePlaybackHealth(rendererEvent);
         if (rendererEvent.Type != RendererEventType.Heartbeat)
         {
@@ -654,6 +665,12 @@ public partial class MainViewModel : ObservableObject
                 StatusMessage = "壁紙を表示しました。GDI描画・実デスクトップ画素・継続表示まで検証済みです。";
                 FooterMessage = "再生中です。Ctrl + Alt + Shift + F12 でいつでも停止できます。";
                 break;
+            case RendererEventType.WallpaperShellCompositionVerified:
+                ShellCompositionStatus = "✓ Shell合成検証済み：アイコン・タスクバー・入力・フォーカスを保護しています。";
+                break;
+            case RendererEventType.ShellCompositionValidationFailed:
+                ShellCompositionStatus = $"✕ Shell合成検証失敗：{rendererEvent.UserMessage ?? "安全条件を満たしません。"}";
+                break;
             case RendererEventType.WallpaperVisible:
                 StatusMessage = "Renderer HWNDは可視ですが、最終成功判定を継続検証しています。";
                 break;
@@ -686,7 +703,24 @@ public partial class MainViewModel : ObservableObject
             : "未取得";
         PlaybackHealth = $"{metrics.MediaState}  ·  Vout {metrics.VoutCount}  ·  映像進行 {age}  ·  MediaTime {metrics.MediaTimeMs}ms  ·  再接続 {metrics.ReconnectCount}回\n" +
                          $"HWND 0x{metrics.RendererHwnd.ToInt64():X}  ·  親 0x{metrics.ParentHwnd.ToInt64():X} / 期待値 0x{metrics.ExpectedParentHwnd.ToInt64():X}  ·  表示 {metrics.WindowVisible}  ·  矩形 {metrics.RendererRect}  ·  モニター {metrics.MonitorRect}";
+        if (metrics.ShellComposition is { } shell)
+        {
+            ShellCompositionStatus = FormatShellCompositionStatus(shell);
+        }
     }
+
+    private static string FormatShellCompositionStatus(RendererShellCompositionMetrics shell) =>
+        $"映像 {(shell.RendererFramesVisibleOnDesktop ? "✓" : "✕")}  " +
+        $"ホスト {(shell.DesktopIconHostLocated && shell.DesktopIconHostVisible ? "✓" : "✕")}  " +
+        $"アイコン前面 {(shell.DesktopIconsAboveRenderer ? "✓" : "✕")}  " +
+        $"タスクバー表示 {(shell.TaskbarLocated && shell.TaskbarVisible ? "✓" : "✕")}  " +
+        $"タスクバー前面 {(shell.TaskbarAboveRenderer ? "✓" : "✕")}  " +
+        $"入力 {(shell.DesktopInputAvailable ? "✓" : "✕")}  " +
+        $"Alt+Tab外 {(shell.RendererNotInAltTab ? "✓" : "✕")}  " +
+        $"タスクバー外 {(shell.RendererNotInTaskbar ? "✓" : "✕")}  " +
+        $"フォーカス非取得 {(shell.RendererDoesNotOwnForeground ? "✓" : "✕")}\n" +
+        $"Shell合成：{(shell.IsCompositionVerified ? "検証済み" : "未検証")}  アイコン数：{shell.DesktopIconCount}  " +
+        $"Renderer Z:{shell.RendererZOrderIndex} / ShellView Z:{shell.ShellViewZOrderIndex} / Taskbar Z:{shell.TaskbarZOrderIndex}";
 
     private async Task MarkFailureAsync(string code, string message, string? technicalDetails)
     {

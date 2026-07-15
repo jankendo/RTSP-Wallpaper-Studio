@@ -50,7 +50,11 @@ public sealed class DesktopAttachmentTransaction
             trace.Add($"event=WindowStyleUpdated; style=0x{newStyle:X}");
 
             var exStyle = NativeMethods.GetWindowLongPtr(rendererHwnd, NativeMethods.GwlexStyle).ToInt64();
-            var newExStyle = exStyle | NativeMethods.WsExToolWindow | NativeMethods.WsExNoActivate;
+            // A wallpaper renderer is never an application window or a
+            // topmost window. Keeping these bits from a previous top-level
+            // incarnation is a common cause of taskbar/icon coverage.
+            var newExStyle = (exStyle | NativeMethods.WsExToolWindow | NativeMethods.WsExNoActivate) &
+                             ~(NativeMethods.WsExTopmost | NativeMethods.WsExAppWindow);
             if (!SetWindowStyle(rendererHwnd, NativeMethods.GwlexStyle, newExStyle, out var exStyleError))
             {
                 return FailAndRollback(rendererHwnd, snapshot, RendererErrorCodes.WallpaperStyleUpdateFailed,
