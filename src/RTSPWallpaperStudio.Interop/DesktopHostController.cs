@@ -27,19 +27,29 @@ public sealed class DesktopHostController
 
     public DesktopHostDiscoveryResult DiscoverExisting() => _lastDiscovery ?? _discovery.DiscoverExisting();
 
-    public DesktopAttachResult Attach(nint rendererHwnd, MonitorInfo monitor)
+    public IReadOnlyList<DesktopHostDiscoveryResult> DiscoverCandidatesForApply()
     {
-        var discovery = DiscoverForApply();
+        var candidates = _discovery.DiscoverCandidates();
+        if (candidates.All(x => !x.Success))
+        {
+            _discovery.EnsureDesktopHostCreated();
+            candidates = _discovery.DiscoverCandidates();
+        }
+
+        return candidates.Where(x => x.Success).ToArray();
+    }
+
+    public DesktopAttachResult Attach(nint rendererHwnd, MonitorInfo monitor, DesktopHostDiscoveryResult? discovered = null)
+    {
+        var discovery = discovered ?? DiscoverForApply();
+        _lastDiscovery = discovery;
         if (!discovery.Success)
         {
             return new(false, RendererErrorCodes.DesktopHostNotFound,
                 "デスクトップの安全な壁紙構造を判定できません。Rendererは表示しません。", discovery.Diagnostic, null, discovery);
         }
 
-        var strategy = discovery.Strategy == DesktopLayoutStrategy.RaisedDesktop
-            ? (IDesktopHostStrategy)new RaisedDesktopStrategy()
-            : new LegacyWorkerWStrategy();
-        var result = strategy.Attach(rendererHwnd, monitor);
+        var result = new DesktopAttachmentTransaction(discovery, monitor).Attach(rendererHwnd);
         _lastDiscovery = result.Discovery ?? discovery;
         return result;
     }

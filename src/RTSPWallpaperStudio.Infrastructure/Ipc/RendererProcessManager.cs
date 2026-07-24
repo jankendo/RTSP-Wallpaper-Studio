@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.IO.Pipes;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
@@ -27,7 +28,12 @@ public sealed class RendererProcessManager : IAsyncDisposable
     {
         var pipeName = $"RTSPWallpaperStudio-{Environment.ProcessId}-{Guid.NewGuid():N}";
         var rendererId = Guid.NewGuid().ToString("N");
-        var rendererPath = ResolveRendererPath();
+        var resolution = ResolveRendererPath();
+        var rendererPath = resolution.Path;
+        var workingDirectory = Path.GetDirectoryName(rendererPath) ?? AppContext.BaseDirectory;
+        _logger.LogInformation(
+            "RendererExecutableResolved event=RendererExecutableResolved path={Path} source={Source} workingDirectory={WorkingDirectory} metadata={Metadata} candidates={Candidates}",
+            rendererPath, resolution.Source, workingDirectory, DescribeExecutable(rendererPath), string.Join(" | ", resolution.Candidates));
         var server = new NamedPipeServerStream(
             pipeName,
             PipeDirection.InOut,
@@ -49,7 +55,7 @@ public sealed class RendererProcessManager : IAsyncDisposable
             RedirectStandardOutput = true,
             StandardErrorEncoding = Encoding.UTF8,
             StandardOutputEncoding = Encoding.UTF8,
-            WorkingDirectory = AppContext.BaseDirectory
+            WorkingDirectory = workingDirectory
         });
         if (process is null)
         {
@@ -75,7 +81,13 @@ public sealed class RendererProcessManager : IAsyncDisposable
         process.BeginOutputReadLine();
 
         var job = new WindowsJobObject(_logger);
-        var session = new RendererSession(process, server, job, rendererId, _logger, PublishEvent);
+        var session = new RendererSession(process, server, job, rendererId, rendererPath, workingDirectory, _logger, PublishEvent);
+        process.EnableRaisingEvents = true;
+        process.Exited += (_, _) => session.OnProcessExited();
+        if (process.HasExited)
+        {
+            session.OnProcessExited();
+        }
         lock (_sessionsLock)
         {
             _sessions.Add(session);
@@ -85,17 +97,20 @@ public sealed class RendererProcessManager : IAsyncDisposable
         {
             _logger.LogInformation("Renderer IPC接続を待機します。PID={Pid} Pipe={PipeName}", process.Id, pipeName);
             await session.ConnectAsync(cancellationToken).WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
-            _logger.LogInformation("Renderer IPC接続が完了しました。PID={Pid}", process.Id);
+            _logger.LogInformation("RendererPipeConnected event=RendererPipeConnected PID={Pid} path={Path}", process.Id, rendererPath);
             // Assign only after the child has connected. This avoids a Windows job
             // boundary interfering with the initial named-pipe handshake.
             job.Assign(process);
             session.StartEventLoop(cancellationToken);
+            PublishEvent(new RendererEvent(rendererId, RendererEventType.WallpaperCommandInvoked, DateTimeOffset.UtcNow,
+                UserMessage: "壁紙設定コマンドをRendererへ送信します。",
+                TechnicalDetails: $"rendererPid={process.Id}; rendererPath={rendererPath}; monitorId={options.MonitorId}; renderTestPattern={options.RenderTestPattern}"));
             await session.SendAsync(new IpcMessage(
                 IpcMessageKind.Command,
                 "start",
                 JsonSerializer.Serialize(options)), cancellationToken).WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
-            _logger.LogInformation("Rendererを起動しました。PID={Pid} Monitor={MonitorId} RendererId={RendererId}",
-                process.Id, options.MonitorId, rendererId);
+            _logger.LogInformation("RendererProcessStarted event=RendererProcessStarted PID={Pid} Monitor={MonitorId} RendererId={RendererId} path={Path} workingDirectory={WorkingDirectory}",
+                process.Id, options.MonitorId, rendererId, rendererPath, workingDirectory);
         }
         catch
         {
@@ -122,6 +137,7 @@ public sealed class RendererProcessManager : IAsyncDisposable
         {
             try
             {
+                session.MarkStopRequested();
                 await session.SendAsync(new IpcMessage(IpcMessageKind.Command, "stop"), cancellationToken);
                 await session.WaitForExitAsync(TimeSpan.FromSeconds(3), cancellationToken);
             }
@@ -159,26 +175,56 @@ public sealed class RendererProcessManager : IAsyncDisposable
         RendererEventReceived?.Invoke(this, rendererEvent);
     }
 
-    private static string ResolveRendererPath()
+    private static RendererPathResolution ResolveRendererPath()
     {
+        var candidates = new List<string>();
         var local = Path.Combine(AppContext.BaseDirectory, "RTSPWallpaperStudio.Renderer.exe");
+        candidates.Add(local);
         if (File.Exists(local))
         {
-            return local;
+            return new(local, "app-base", candidates);
+        }
+
+        var sibling = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "renderer", "RTSPWallpaperStudio.Renderer.exe"));
+        candidates.Add(sibling);
+        if (File.Exists(sibling))
+        {
+            return new(sibling, "portable-sibling-renderer", candidates);
         }
 
         var projectRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "RTSPWallpaperStudio.Renderer", "bin", "x64"));
         foreach (var configuration in new[] { "Release", "Debug" })
         {
             var candidate = Path.Combine(projectRoot, configuration, "net10.0-windows10.0.19041.0", "RTSPWallpaperStudio.Renderer.exe");
+            candidates.Add(candidate);
             if (File.Exists(candidate))
             {
-                return candidate;
+                return new(candidate, $"development-{configuration.ToLowerInvariant()}", candidates);
             }
         }
 
-        throw new FileNotFoundException("Renderer実行ファイルが見つかりません。Portable配置では同じフォルダーへ配置してください。", projectRoot);
+        throw new FileNotFoundException(
+            $"Renderer実行ファイルが見つかりません。確認した候補: {string.Join("; ", candidates)}",
+            local);
     }
+
+    private static string DescribeExecutable(string path)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+            var version = FileVersionInfo.GetVersionInfo(path);
+            using var stream = File.OpenRead(path);
+            var hash = Convert.ToHexString(SHA256.HashData(stream));
+            return $"fileVersion={version.FileVersion ?? "-"};productVersion={version.ProductVersion ?? "-"};length={info.Length};lastWriteUtc={info.LastWriteTimeUtc:O};sha256={hash}";
+        }
+        catch (Exception ex)
+        {
+            return $"metadata-error={ex.GetType().Name}:{ex.Message}";
+        }
+    }
+
+    private sealed record RendererPathResolution(string Path, string Source, IReadOnlyList<string> Candidates);
 
     private sealed class RendererSession : IAsyncDisposable
     {
@@ -188,17 +234,22 @@ public sealed class RendererProcessManager : IAsyncDisposable
         private readonly WindowsJobObject _job;
         private readonly ILogger _logger;
         private readonly Action<RendererEvent> _eventSink;
+        private readonly string _rendererPath;
+        private readonly string _workingDirectory;
         private readonly SemaphoreSlim _writeLock = new(1, 1);
         private readonly CancellationTokenSource _lifetime = new();
+        private int _stopRequested;
         private Task? _eventLoop;
 
         public RendererSession(Process process, NamedPipeServerStream pipe, WindowsJobObject job, string rendererId,
-            ILogger logger, Action<RendererEvent> eventSink)
+            string rendererPath, string workingDirectory, ILogger logger, Action<RendererEvent> eventSink)
         {
             Process = process;
             _pipe = pipe;
             _job = job;
             RendererId = rendererId;
+            _rendererPath = rendererPath;
+            _workingDirectory = workingDirectory;
             _logger = logger;
             _eventSink = eventSink;
         }
@@ -206,12 +257,45 @@ public sealed class RendererProcessManager : IAsyncDisposable
         public Process Process { get; }
         public string RendererId { get; }
 
+        public void MarkStopRequested() => Interlocked.Exchange(ref _stopRequested, 1);
+
+        public void OnProcessExited()
+        {
+            if (Volatile.Read(ref _stopRequested) != 0)
+            {
+                _logger.LogInformation("RendererProcessExited event=RendererProcessExited intentional=true PID={Pid} exitCode={ExitCode}", Process.Id, TryGetExitCode());
+                return;
+            }
+
+            var exitCode = TryGetExitCode();
+            _logger.LogError("RendererProcessExited event=RendererProcessExited unexpected=true PID={Pid} exitCode={ExitCode} path={Path} workingDirectory={WorkingDirectory}",
+                Process.Id, exitCode, _rendererPath, _workingDirectory);
+            _eventSink(new RendererEvent(RendererId, RendererEventType.FatalError, DateTimeOffset.UtcNow,
+                RendererErrorCodes.RendererCrashLoop,
+                "Rendererプロセスが予期せず終了しました。壁紙は表示していません。",
+                $"event=RendererProcessExited; pid={Process.Id}; exitCode={exitCode}; path={_rendererPath}; workingDirectory={_workingDirectory}"));
+        }
+
+        private int TryGetExitCode()
+        {
+            try { return Process.ExitCode; }
+            catch (InvalidOperationException) { return int.MinValue; }
+        }
+
         public async Task ConnectAsync(CancellationToken cancellationToken)
         {
             // Use the synchronous Win32 wait on a worker thread. On some Windows
             // desktop builds WaitForConnectionAsync can remain pending even while
             // a compatible client is already trying to connect.
-            await Task.Run(_pipe.WaitForConnection, cancellationToken);
+            var connectionTask = Task.Run(_pipe.WaitForConnection, cancellationToken);
+            var exitTask = Process.WaitForExitAsync(cancellationToken);
+            var completed = await Task.WhenAny(connectionTask, exitTask);
+            if (completed == exitTask && !_pipe.IsConnected)
+            {
+                throw new InvalidOperationException($"RendererがIPC接続前に終了しました。PID={Process.Id} exitCode={TryGetExitCode()} path={_rendererPath}");
+            }
+
+            await connectionTask;
             _reader = new StreamReader(_pipe, IpcEncoding, leaveOpen: true);
             _writer = new StreamWriter(_pipe, IpcEncoding, leaveOpen: true) { AutoFlush = true, NewLine = "\n" };
         }
@@ -251,6 +335,7 @@ public sealed class RendererProcessManager : IAsyncDisposable
 
         public async ValueTask DisposeAsync()
         {
+            MarkStopRequested();
             _lifetime.Cancel();
             _writer?.Dispose();
             _reader?.Dispose();

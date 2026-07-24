@@ -8,7 +8,7 @@ namespace RTSPWallpaperStudio.Interop;
 /// </summary>
 public static class DesktopWindowDiagnostics
 {
-    public static nint GetParent(nint hwnd) => NativeMethods.GetAncestor(hwnd, NativeMethods.GaParent);
+    public static nint GetParent(nint hwnd) => NativeMethods.GetParent(hwnd);
 
     public static bool TryGetScreenRect(nint hwnd, out RectD rect)
     {

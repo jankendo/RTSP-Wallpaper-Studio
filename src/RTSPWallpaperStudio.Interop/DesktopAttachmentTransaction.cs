@@ -31,55 +31,83 @@ public sealed class DesktopAttachmentTransaction
         }
 
         var snapshot = Capture(rendererHwnd);
+        var trace = new List<string> { $"event=AttachStarted; renderer=0x{rendererHwnd.ToInt64():X}; host=0x{_discovery.HostHwnd.ToInt64():X}; strategy={_discovery.Strategy}" };
         NativeMethods.ShowWindow(rendererHwnd, NativeMethods.SwHide);
+        trace.Add("event=RendererHidden");
 
         try
         {
+            var raisedDesktop = _discovery.Strategy == DesktopLayoutStrategy.RaisedDesktop;
+            var shellViewBackground = _discovery.Strategy == DesktopLayoutStrategy.ShellViewBackground;
+            var progmanBackground = _discovery.Strategy == DesktopLayoutStrategy.ProgmanBackground;
             var style = NativeMethods.GetWindowLongPtr(rendererHwnd, NativeMethods.GwlStyle).ToInt64();
-            var newStyle = (style | NativeMethods.WsChild | NativeMethods.WsClipChildren | NativeMethods.WsClipSiblings) & ~NativeMethods.WsPopup;
+            var newStyle = raisedDesktop
+                ? (style | NativeMethods.WsPopup | NativeMethods.WsClipChildren | NativeMethods.WsClipSiblings) & ~NativeMethods.WsChild
+                : (style | NativeMethods.WsChild | NativeMethods.WsClipChildren | NativeMethods.WsClipSiblings) & ~NativeMethods.WsPopup;
             if (!SetWindowStyle(rendererHwnd, NativeMethods.GwlStyle, newStyle, out var styleError))
             {
                 return FailAndRollback(rendererHwnd, snapshot, RendererErrorCodes.WallpaperStyleUpdateFailed,
-                    "Rendererのウィンドウスタイル変更に失敗しました。", $"SetWindowLongPtr(style) Win32={styleError}");
+                    "Rendererのウィンドウスタイル変更に失敗しました。", $"{string.Join(';', trace)}; event=WindowStyleUpdateFailed; SetWindowLongPtr(style) Win32={styleError}; desired=0x{newStyle:X}; current=0x{NativeMethods.GetWindowLongPtr(rendererHwnd, NativeMethods.GwlStyle).ToInt64():X}");
             }
+            trace.Add($"event=WindowStyleUpdated; style=0x{newStyle:X}");
 
             var exStyle = NativeMethods.GetWindowLongPtr(rendererHwnd, NativeMethods.GwlexStyle).ToInt64();
-            var newExStyle = exStyle | NativeMethods.WsExToolWindow | NativeMethods.WsExNoActivate;
+            // A wallpaper renderer is never an application window or a
+            // topmost window. Keeping these bits from a previous top-level
+            // incarnation is a common cause of taskbar/icon coverage.
+            var newExStyle = (exStyle | NativeMethods.WsExToolWindow | NativeMethods.WsExNoActivate) &
+                             ~(NativeMethods.WsExTopmost | NativeMethods.WsExAppWindow);
             if (!SetWindowStyle(rendererHwnd, NativeMethods.GwlexStyle, newExStyle, out var exStyleError))
             {
                 return FailAndRollback(rendererHwnd, snapshot, RendererErrorCodes.WallpaperStyleUpdateFailed,
-                    "Rendererの拡張ウィンドウスタイル変更に失敗しました。", $"SetWindowLongPtr(exStyle) Win32={exStyleError}");
+                    "Rendererの拡張ウィンドウスタイル変更に失敗しました。", $"{string.Join(';', trace)}; event=ExtendedWindowStyleUpdateFailed; SetWindowLongPtr(exStyle) Win32={exStyleError}; desired=0x{newExStyle:X}; current=0x{NativeMethods.GetWindowLongPtr(rendererHwnd, NativeMethods.GwlexStyle).ToInt64():X}");
             }
+            trace.Add($"event=ExtendedWindowStyleUpdated; exStyle=0x{newExStyle:X}");
 
             var frameFlags = NativeMethods.SetWindowPosNoActivate | NativeMethods.SetWindowPosFrameChanged | NativeMethods.SetWindowPosNoSendChanging;
             if (!NativeMethods.SetWindowPos(rendererHwnd, 0, 0, 0, 0, 0,
                     frameFlags | NativeMethods.SetWindowPosNoMove | NativeMethods.SetWindowPosNoSize | NativeMethods.SetWindowPosNoZOrder))
             {
                 return FailAndRollback(rendererHwnd, snapshot, RendererErrorCodes.WallpaperStyleUpdateFailed,
-                    "Rendererのフレームスタイル反映に失敗しました。", $"SetWindowPos(frame) Win32={Marshal.GetLastWin32Error()}");
+                    "Rendererのフレームスタイル反映に失敗しました。", $"{string.Join(';', trace)}; event=FrameStyleUpdateFailed; SetWindowPos(frame) Win32={Marshal.GetLastWin32Error()}");
             }
+            trace.Add("event=FrameStyleChanged");
 
             NativeMethods.SetLastError(0);
-            NativeMethods.SetParent(rendererHwnd, _discovery.HostHwnd);
+            NativeMethods.SetParent(rendererHwnd, raisedDesktop ? NativeMethods.HwndDesktop : _discovery.HostHwnd);
             var setParentError = Marshal.GetLastPInvokeError();
-            var actualParent = NativeMethods.GetAncestor(rendererHwnd, NativeMethods.GaParent);
-            if (actualParent != _discovery.HostHwnd)
+            var actualParent = NativeMethods.GetParent(rendererHwnd);
+            var expectedParent = raisedDesktop ? NativeMethods.HwndDesktop : _discovery.HostHwnd;
+            if (actualParent != expectedParent)
             {
                 var code = setParentError == 0 ? RendererErrorCodes.WallpaperParentMismatch : RendererErrorCodes.WallpaperSetParentFailed;
                 return FailAndRollback(rendererHwnd, snapshot, code,
                     "Rendererを安全な壁紙ホストへ配置できませんでした.",
-                    $"SetParent Win32={setParentError}; actualParent=0x{actualParent.ToInt64():X}; expectedParent=0x{_discovery.HostHwnd.ToInt64():X}");
+                    $"{string.Join(';', trace)}; event=SetParentFailed; SetParent Win32={setParentError}; actualParent=0x{actualParent.ToInt64():X}; expectedParent=0x{expectedParent.ToInt64():X}");
             }
+            trace.Add($"event=SetParentResult; win32={setParentError}; actualParent=0x{actualParent.ToInt64():X}; expectedParent=0x{expectedParent.ToInt64():X}");
 
-            if (!TryMapMonitorToParent(_discovery.HostHwnd, _monitor.Bounds, out var localTopLeft, out var mappingDiagnostic))
+            NativeMethods.Point localTopLeft;
+            string mappingDiagnostic;
+            if (raisedDesktop)
+            {
+                localTopLeft = new NativeMethods.Point { X = (int)_monitor.Bounds.X, Y = (int)_monitor.Bounds.Y };
+                mappingDiagnostic = "screen coordinates are used for the top-level RaisedDesktop fallback";
+            }
+            else if (!TryMapMonitorToParent(_discovery.HostHwnd, _monitor.Bounds, out localTopLeft, out mappingDiagnostic))
             {
                 return FailAndRollback(rendererHwnd, snapshot, RendererErrorCodes.WallpaperCoordinateMappingFailed,
-                    "ディスプレイ座標を壁紙ホスト座標へ変換できませんでした。", mappingDiagnostic);
+                    "ディスプレイ座標を壁紙ホスト座標へ変換できませんでした。", $"{string.Join(';', trace)}; event=CoordinateMappingFailed; {mappingDiagnostic}");
             }
+            trace.Add($"event=CoordinateMapped; localX={localTopLeft.X}; localY={localTopLeft.Y}; mode={(raisedDesktop ? "screen" : "parent")}");
 
-            var insertAfter = _discovery.Strategy == DesktopLayoutStrategy.RaisedDesktop ? _discovery.ShellViewHwnd : 0;
+            var insertAfter = raisedDesktop
+                ? _discovery.ProgmanHwnd
+                : shellViewBackground || progmanBackground
+                    ? _discovery.IconHostHwnd
+                    : 0;
             var positionFlags = NativeMethods.SetWindowPosNoActivate | NativeMethods.SetWindowPosFrameChanged | NativeMethods.SetWindowPosNoSendChanging;
-            if (_discovery.Strategy == DesktopLayoutStrategy.LegacyWorkerW)
+            if (!raisedDesktop && !shellViewBackground && !progmanBackground)
             {
                 positionFlags |= NativeMethods.SetWindowPosNoZOrder | NativeMethods.SetWindowPosNoOwnerZOrder;
             }
@@ -88,8 +116,9 @@ public sealed class DesktopAttachmentTransaction
                     (int)_monitor.Bounds.Width, (int)_monitor.Bounds.Height, positionFlags))
             {
                 return FailAndRollback(rendererHwnd, snapshot, RendererErrorCodes.WallpaperRectValidationFailed,
-                    "壁紙ウィンドウの配置に失敗しました。", $"SetWindowPos Win32={Marshal.GetLastWin32Error()}");
+                    "壁紙ウィンドウの配置に失敗しました。", $"{string.Join(';', trace)}; event=RendererBoundsApplyFailed; SetWindowPos Win32={Marshal.GetLastWin32Error()}");
             }
+            trace.Add($"event=RendererBoundsApplied; screen={_monitor.Bounds}; zorder={(raisedDesktop ? $"immediately-behind-Progman-0x{_discovery.ProgmanHwnd.ToInt64():X}" : shellViewBackground ? $"behind-SysListView32-0x{insertAfter.ToInt64():X}" : progmanBackground ? $"behind-ShellView-0x{insertAfter.ToInt64():X}" : "host-child")}");
 
             var validationOk = DesktopAttachmentValidator.Validate(rendererHwnd, _discovery, out var validationDiagnostic);
             var rectOk = DesktopAttachmentValidator.ValidateRect(rendererHwnd, _monitor.Bounds, out var rectDiagnostic);
@@ -97,11 +126,12 @@ public sealed class DesktopAttachmentTransaction
             {
                 var diagnostic = string.IsNullOrWhiteSpace(validationDiagnostic) ? rectDiagnostic : validationDiagnostic;
                 return FailAndRollback(rendererHwnd, snapshot, RendererErrorCodes.WallpaperRectValidationFailed,
-                    "壁紙ウィンドウの親子関係または矩形検証に失敗しました。", diagnostic);
+                    "壁紙ウィンドウの親子関係または矩形検証に失敗しました。", $"{string.Join(';', trace)}; event=AttachValidationFailed; {diagnostic}");
             }
+            trace.Add($"event=AttachValidationPassed; parent=0x{NativeMethods.GetParent(rendererHwnd).ToInt64():X}; rect={_monitor.Bounds}; visible={NativeMethods.IsWindowVisible(rendererHwnd)}");
 
             return new DesktopAttachResult(true, string.Empty, "壁紙ホストへの配置を検証しました。",
-                $"strategy={_discovery.Strategy}; host=0x{_discovery.HostHwnd.ToInt64():X}; shellView=0x{_discovery.ShellViewHwnd.ToInt64():X}", snapshot, _discovery);
+                $"{string.Join(';', trace)}; host=0x{_discovery.HostHwnd.ToInt64():X}; shellView=0x{_discovery.ShellViewHwnd.ToInt64():X}; actualParent=0x{NativeMethods.GetParent(rendererHwnd).ToInt64():X}", snapshot, _discovery);
         }
         catch (Exception ex)
         {
@@ -114,7 +144,7 @@ public sealed class DesktopAttachmentTransaction
     {
         NativeMethods.GetWindowRect(hwnd, out var rect);
         return new WindowSnapshot(
-            NativeMethods.GetAncestor(hwnd, NativeMethods.GaParent),
+            NativeMethods.GetParent(hwnd),
             NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GwlStyle).ToInt64(),
             NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GwlexStyle).ToInt64(),
             ToRectD(rect),
@@ -136,7 +166,7 @@ public sealed class DesktopAttachmentTransaction
         NativeMethods.SetLastError(0);
         NativeMethods.SetParent(hwnd, snapshot.ParentHwnd);
         var parentError = Marshal.GetLastPInvokeError();
-        if (NativeMethods.GetAncestor(hwnd, NativeMethods.GaParent) != snapshot.ParentHwnd && parentError != 0)
+        if (NativeMethods.GetParent(hwnd) != snapshot.ParentHwnd && parentError != 0)
         {
             diagnostic = $"元の親へ復元できません。Win32={parentError}";
             NativeMethods.DestroyWindow(hwnd);
@@ -174,6 +204,10 @@ public sealed class DesktopAttachmentTransaction
         if (!Rollback(hwnd, snapshot, out var rollbackDiagnostic))
         {
             details += $"; rollback={rollbackDiagnostic}";
+        }
+        else
+        {
+            details += "; event=AttachRollbackCompleted";
         }
 
         return Failure(code, message, details, snapshot);

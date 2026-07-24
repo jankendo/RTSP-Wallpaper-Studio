@@ -4,6 +4,7 @@
     <RootNamespace>RTSPWallpaperStudio.Renderer</RootNamespace>
     <AssemblyName>RTSPWallpaperStudio.Renderer</AssemblyName>
     <ApplicationManifest>renderer.manifest</ApplicationManifest>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\RTSPWallpaperStudio.Core\RTSPWallpaperStudio.Core.csproj" />

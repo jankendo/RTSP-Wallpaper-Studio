@@ -57,6 +57,7 @@ public partial class App : System.Windows.Application
                 services.AddSingleton<JsonSettingsStore>();
                 services.AddSingleton<ProtectedSecretStore>();
                 services.AddSingleton<ConnectionTester>();
+                services.AddSingleton<DiagnosticsPackageService>();
                 services.AddSingleton<DesktopMonitorProvider>();
                 services.AddSingleton<RuntimeStateStore>();
                 services.AddSingleton<RendererProcessManager>();

@@ -1,20 +1,25 @@
 # RTSP Wallpaper Studio
 
-RTSP映像を、Windowsデスクトップアイコンの背面にあるWorkerWへネイティブ動画ウィンドウとして配置する、Windows 10/11 x64向けのライブ壁紙アプリです。
+RTSP映像をWindows Shellのデスクトップ合成層へ配置し、デスクトップアイコンとタスクバーを維持するWindows 10/11 x64向けのライブ壁紙アプリです。
 
-> 現在は公開開発版です。純Win32 Renderer、First Frame Gate、WorkerW/Raised Desktopの安全なAttach transaction、双方向IPC、安全停止と診断GUIを実装しています。実機カメラでの長時間再生、Explorer再起動、マルチモニター抜き差し、MSIX署名は未検証です。
+> 現在は公開開発版です。純Win32 Renderer、First Frame Gate、WorkerW/Raised Desktop/Shell合成検証、双方向IPC、安全停止と診断GUIを実装しています。実機RTSPの連続デコード・描画検証は実施済みです。Explorer再起動、マルチモニター抜き差し、MSIX署名は継続検証項目です。
 
 ## 主な機能
 
 - WPF製の日本語GUI
 - `rtsp://` / `rtsps://` URLの検証と資格情報分離
 - LibVLCSharpによるRenderer別プロセス再生
-- WorkerW / Raised Desktopへの壁紙ウィンドウ配置（実親・スタイル・矩形・Z順の検証付き）
+- WorkerW / ShellView / Raised Desktop候補の探索と、実親・スタイル・矩形・Z順・合成画素による検証
+- Windows 11 Raised Desktopでは、Explorerから取得したアイコン・ラベル矩形をレイヤード描画から除外してアイコン表示と入力を維持
+- デスクトップアイコン・タスクバー・入力・フォーカス・Alt+Tabを含むWindows Shell合成検証
+- H.265/HEVC向けLibVLC vmem + CPUフレームコールバック描画（D3D11 voutのデッドロック回避）
 - Appが先に作る現在ユーザー限定の双方向Named Pipe IPC
-- First Frame Gate：映像出力が確認されるまでRendererは表示しない
+- First Frame Gate：`Playing`、デコード済みフレーム、単調時計による安定進行を確認するまでRendererは表示しない
 - Job Object、親PID監視、runtime-state.json、Ctrl + Alt + Shift + F12緊急停止
 - モニター列挙、永続ID生成、Fill / Fit / Stretch / Center / 1:1のレイアウト計算
-- Rendererと同じLibVLC経路を使うRTSP接続テスト（Playing + VoutCount > 0のFirst Frame Gate）
+- LibVLCによるRTSP接続テスト（Playing + 映像出力の確認）
+- 再生後の映像進行監視（8秒停止で `RTSP_PLAYBACK_STALLED` を記録し、MediaPlayerを安全に再生成）
+- 初回接続と自動復旧のバックオフ再試行（起動直後のカメラ・go2rtc準備遅延で壁紙を終了させない）
 - TCP / UDP / 自動方式、ネットワークキャッシュ、ハードウェアデコード設定の共通化
 - 起動時の `C:\go2rtc\go2rtc.exe` 自動起動、8554待受確認、アプリ所有プロセスの安全な終了
 - 接続テストの段階表示、キャンセル、具体的なエラーコード、認証情報の優先順位表示
@@ -59,9 +64,19 @@ dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.D
 dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.Diagnostics.csproj -c Release -p:Platform=x64 -- --url rtsp://127.0.0.1:8554/test --transport tcp --timeout 10 --wallpaper
 dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.Diagnostics.csproj -c Release -p:Platform=x64 -- --start-go2rtc --url rtsp://127.0.0.1:8554/switchbot3mp --transport tcp --timeout 15 --wallpaper
 dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.Diagnostics.csproj -c Release -p:Platform=x64 -- --ipc-smoke
+dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.Diagnostics.csproj -c Release -p:Platform=x64 -- --url rtsp://127.0.0.1:8555/test --transport tcp --wallpaper --hold-seconds 30
+dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.Diagnostics.csproj -c Release -p:Platform=x64 -- --url rtsp://127.0.0.1:8555/test --transport tcp --wallpaper-only --hold-seconds 30
+dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.Diagnostics.csproj -c Release -p:Platform=x64 -- --url rtsp://127.0.0.1:8555/test --transport tcp --wallpaper-only --desktop-probe --hold-seconds 30
 ```
 
-`--wallpaper` を付けると、接続テスト成功後にRendererを起動し、`WallpaperVisible`イベントを受信してから停止します。`--start-go2rtc` は `C:\go2rtc\go2rtc.exe` を診断プロセスの所有下で起動し、検証終了時にそれだけを停止します。`--ipc-smoke` はRTSP接続を省略してRendererのNamed Pipe接続、Ready/Heartbeat/停止イベントだけを検証します。GUIを使わないため、CI・障害再現・ログ採取に利用できます。
+`--wallpaper` を付けると、接続テスト成功後にRendererを起動し、`WallpaperVisible`イベントを受信してから停止します。`--hold-seconds` を併用すると指定秒数だけ表示を維持し、長時間再生・フリーズ監視を検証できます。`--start-go2rtc` は `C:\go2rtc\go2rtc.exe` を診断プロセスの所有下で起動し、検証終了時にそれだけを停止します。`--ipc-smoke` はRTSP接続を省略してRendererのNamed Pipe接続、Ready/Heartbeat/停止イベントだけを検証します。GUIを使わないため、CI・障害再現・ログ採取に利用できます。
+`--wallpaper-only` は接続テストを省略し、アプリの「壁紙に設定」操作と同じRenderer直接起動を検証します。`--desktop-probe` は表示HWNDの親・owner・class・style・矩形・可視状態を確認し、実デスクトップDC、背景専用サンプル、提示フレーム進行を組み合わせて動画の動きを確認します。成功条件にはアイコンホスト、タスクバー、入力、フォーカス、Alt+Tab安全性も含まれます。既にGUIから表示中のHWNDを検証する場合は、ログ／診断画面のHWNDを使って次を実行できます。
+
+`--shell-probe --shell-probe-output artifacts\qa\shell-hierarchy-before.json` は、ExplorerのProgman、WorkerW、SHELLDLL_DefView、SysListView32、Shell_TrayWnd、Shell_SecondaryTrayWndを変更なしで列挙し、親・owner・root・スタイル・矩形・モニター・前後兄弟・Z順をJSON保存します。壁紙の成功条件は`WallpaperShellCompositionVerified`の後に`WallpaperEndToEndVerified`が発行されることです。
+
+```powershell
+dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.Diagnostics.csproj -c Release -p:Platform=x64 -- --probe-hwnd 0x123456 --probe-seconds 2
+```
 
 アプリは閉じるボタンまたは最小化で終了せず、通知領域へ格納されます。トレイの「表示」で画面を戻し、「緊急停止」でRendererを停止し、「終了」で完全終了します。設定画面の「Windows起動時に起動」を有効にして保存すると、現在ユーザーのHKCU Runへアプリ本体を登録します。「起動時は画面を表示しない」を有効にすると、ログオン時はトレイだけで起動します。
 
@@ -71,6 +86,8 @@ dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.D
 dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.Diagnostics.csproj -c Release -- --startup-status
 dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.Diagnostics.csproj -c Release -- --startup-enable --startup-exe "C:\Path\To\RTSPWallpaperStudio.App.exe"
 dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.Diagnostics.csproj -c Release -- --startup-disable
+dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.Diagnostics.csproj -c Release -- --render-test-pattern --wallpaper-only --desktop-probe --hold-seconds 3
+dotnet run --project .\src\RTSPWallpaperStudio.Diagnostics\RTSPWallpaperStudio.Diagnostics.csproj -c Release -- --create-diagnostics-package
 ```
 
 ## ビルド
@@ -87,7 +104,7 @@ Portable ZIPを作成するには、PowerShellで次を実行します。
 .\installer\scripts\build-portable.ps1
 ```
 
-出力先は `artifacts\portable\` です。AppとRendererを同じフォルダーへ配置し、LibVLC関連ファイルも同梱します。
+出力先は `artifacts\portable\` です。App直下に同梱Rendererを配置するほか、`renderer` siblingフォルダーも解決できるため、配布レイアウトを変更しても実行ファイル・作業ディレクトリ・LibVLC native/pluginsの取り違えを防止します。起動時には解決した絶対パス、配置種別、作業ディレクトリ、ファイルバージョン、更新時刻、SHA256をログへ記録します。
 
 MSIXは `installer\msix\build-msix.ps1` を使います。開発用自己署名証明書は端末ごとに信頼が必要で、正式配布には正式なコード署名証明書を使用してください。
 
@@ -107,7 +124,8 @@ MSIXは `installer\msix\build-msix.ps1` を使います。開発用自己署名�
 ## 既知の制約
 
 - Windowsには動画壁紙用の安定した公開APIがなく、WorkerWは非公開Shell挙動に依存します。Windows大型更新で修正が必要になる可能性があります。
-- 実機RTSP映像、Explorer再起動後の10秒以内復旧、画面ロック/スリープ、モニター抜き差しの実機QAは未実施です。
+- `rtsp://127.0.0.1:8554/switchbot3mp` の実機RTSPは30秒連続検証済みです。Explorer再起動後の10秒以内復旧、画面ロック/スリープ、モニター抜き差しは継続QA項目です。
+- Raised Desktopのアイコン保護はExplorerの現在のアイコン矩形へ追従します。アイコンを極端に密集させた場合、ラベル周辺で標準壁紙が薄く透過して見えることがあります。
 - GUIの現在版は1プロファイル・1 Rendererを中心とした基本フローです。複数Rendererによる複製・スパンの実行制御、MSIX自動更新、診断ZIPは今後の拡張対象です。
 - DRM保護映像、RTSPサーバーの接続数制限、GPUドライバー依存のハードウェアデコードは対象環境の制約を受けます。
 - 本プロジェクトは商用配布前のライセンス確認を代替しません。LibVLC/LibVLCSharpの配布条件を確認してください。

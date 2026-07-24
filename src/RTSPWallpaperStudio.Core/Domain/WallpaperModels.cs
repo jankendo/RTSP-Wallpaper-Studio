@@ -81,7 +81,7 @@ public sealed class AppSettings
     public bool StartWithWindows { get; set; }
     public bool StartMinimized { get; set; } = true;
     public int StartupDelaySeconds { get; set; } = 3;
-    public string ThemeMode { get; set; } = "Light";
+    public string ThemeMode { get; set; } = "Dark";
 }
 
 public readonly record struct RectD(double X, double Y, double Width, double Height)
@@ -158,7 +158,8 @@ public sealed record RendererStartOptions(
     string MonitorId,
     int ParentProcessId,
     HardwareDecodeMode HardwareDecode = HardwareDecodeMode.Automatic,
-    bool MuteAudio = true);
+    bool MuteAudio = true,
+    bool RenderTestPattern = false);
 
 public sealed record RendererStatusMessage(
     PlaybackStatus Status,
@@ -171,6 +172,8 @@ public sealed record RendererStatusMessage(
 public enum DesktopLayoutStrategy
 {
     Unknown,
+    ProgmanBackground,
+    ShellViewBackground,
     LegacyWorkerW,
     RaisedDesktop
 }
@@ -195,7 +198,53 @@ public enum RendererEventType
     Reattached,
     Stopped,
     FatalError,
-    Heartbeat
+    Heartbeat,
+    PlaybackStalled,
+    WallpaperCommandInvoked,
+    RendererWindowCreated,
+    RendererSelfTestFrameRendered,
+    RendererAttached,
+    RendererBoundsValidated,
+    RendererWindowVisibleFlagConfirmed,
+    RendererPixelsDetectedOnOwnWindow,
+    RendererPixelsDetectedOnDesktop,
+    RendererAnimationDetectedOnDesktop,
+    DesktopIconsRemainVisible,
+    RtspDecodedFrameReceived,
+    RtspFrameCopiedToBackBuffer,
+    RtspFramePaintRequested,
+    RtspFramePresented,
+    WallpaperEndToEndVerified,
+    ShellCompositionValidationStarted,
+    DesktopIconHostLocated,
+    DesktopIconHostVisible,
+    DesktopIconZOrderValidated,
+    TaskbarLocated,
+    TaskbarVisible,
+    TaskbarZOrderValidated,
+    RendererAltTabVisibilityChecked,
+    RendererTaskbarVisibilityChecked,
+    RendererFocusOwnershipChecked,
+    DesktopInputHitTestChecked,
+    WallpaperShellCompositionVerified,
+    ShellCompositionValidationFailed,
+    DesktopHostCandidateEvaluationStarted,
+    DesktopHostCandidateAttached,
+    DesktopHostCandidateOwnPixelsDetected,
+    DesktopHostCandidateDesktopPixelsDetected,
+    DesktopHostCandidateAnimationDetected,
+    DesktopHostCandidateIconsValidated,
+    DesktopHostCandidateTaskbarValidated,
+    DesktopHostCandidateAccepted,
+    DesktopHostCandidateRejected,
+    DesktopHostCandidateRollbackCompleted,
+    RendererFramesDecoded,
+    RendererFramesPainted,
+    RendererFramesPresentedToOwnHwnd,
+    RendererPixelsVisibleOnComposedDesktop,
+    RendererAnimationVisibleOnComposedDesktop,
+    DesktopIconsVisibleAboveRenderer,
+    TaskbarVisibleAboveRenderer
 }
 
 public static class RendererErrorCodes
@@ -209,6 +258,7 @@ public static class RendererErrorCodes
     public const string RtspUnauthorized = "RTSP_UNAUTHORIZED";
     public const string RtspNoVideoTrack = "RTSP_NO_VIDEO_TRACK";
     public const string RtspFirstFrameTimeout = "RTSP_FIRST_FRAME_TIMEOUT";
+    public const string RtspPlaybackStalled = "RTSP_PLAYBACK_STALLED";
     public const string DesktopProgmanNotFound = "DESKTOP_PROGMAN_NOT_FOUND";
     public const string DesktopShellViewNotFound = "DESKTOP_SHELL_VIEW_NOT_FOUND";
     public const string DesktopHostNotFound = "DESKTOP_HOST_NOT_FOUND";
@@ -219,6 +269,9 @@ public static class RendererErrorCodes
     public const string WallpaperCoordinateMappingFailed = "WALLPAPER_COORDINATE_MAPPING_FAILED";
     public const string WallpaperRectValidationFailed = "WALLPAPER_RECT_VALIDATION_FAILED";
     public const string WallpaperZOrderValidationFailed = "WALLPAPER_ZORDER_VALIDATION_FAILED";
+    public const string WallpaperPresentationFailed = "WALLPAPER_PRESENTATION_FAILED";
+    public const string WallpaperEndToEndVerificationFailed = "WALLPAPER_END_TO_END_VERIFICATION_FAILED";
+    public const string WallpaperShellCompositionValidationFailed = "WALLPAPER_SHELL_COMPOSITION_VALIDATION_FAILED";
     public const string ExplorerReattachFailed = "EXPLORER_REATTACH_FAILED";
     public const string RendererCrashLoop = "RENDERER_CRASH_LOOP";
 }
@@ -236,7 +289,109 @@ public sealed record RendererMetrics(
     int ReconnectCount,
     DesktopLayoutStrategy DesktopStrategy,
     RectD RendererRect,
-    RectD MonitorRect);
+    RectD MonitorRect,
+    long MediaTimeMs = -1,
+    DateTimeOffset? LastVideoProgressAt = null,
+    double? VideoProgressAgeSeconds = null,
+    bool WindowVisible = false,
+    string? WindowClass = null,
+    long WindowStyle = 0,
+    long ExtendedWindowStyle = 0,
+    long RootHwnd = 0,
+    long OwnerHwnd = 0,
+    RendererPresentationMetrics? Presentation = null,
+    RendererShellCompositionMetrics? ShellComposition = null,
+    string? WallpaperAttemptId = null);
+
+public sealed record RendererShellCompositionMetrics(
+    bool RendererFramesVisibleOnDesktop = false,
+    bool RendererVisibleAboveStaticWallpaper = false,
+    bool RendererFrameDetectedOnComposedDesktop = false,
+    bool RendererAnimationDetectedOnComposedDesktop = false,
+    bool RendererVisibleInBackgroundOnlyRegion = false,
+    bool DesktopIconHostLocated = false,
+    bool DesktopIconHostVisible = false,
+    bool DesktopIconsAboveRenderer = false,
+    bool TaskbarLocated = false,
+    bool TaskbarVisible = false,
+    bool TaskbarAboveRenderer = false,
+    bool RendererNotInAltTab = false,
+    bool RendererNotInTaskbar = false,
+    bool RendererDoesNotOwnForeground = false,
+    bool DesktopInputAvailable = false,
+    bool IsCompositionVerified = false,
+    long RendererHwnd = 0,
+    long RendererParentHwnd = 0,
+    long RendererRootHwnd = 0,
+    long ShellHostHwnd = 0,
+    long ShellViewHwnd = 0,
+    long SysListViewHwnd = 0,
+    long TaskbarHwnd = 0,
+    long InputHitTestHwnd = 0,
+    int DesktopIconCount = 0,
+    long RendererZOrderIndex = -1,
+    long ShellViewZOrderIndex = -1,
+    long SysListViewZOrderIndex = -1,
+    long TaskbarZOrderIndex = -1,
+    int BackgroundSampleCount = 0,
+    int BaselineChangedSamples = 0,
+    int AnimationChangedSamples = 0,
+    int DetectedTestPatternMarkers = 0,
+    string? Diagnostic = null);
+
+public static class RendererShellCompositionContract
+{
+    public static bool IsVerified(RendererShellCompositionMetrics value) =>
+        value.RendererFramesVisibleOnDesktop &&
+        value.RendererVisibleAboveStaticWallpaper &&
+        value.RendererFrameDetectedOnComposedDesktop &&
+        value.RendererAnimationDetectedOnComposedDesktop &&
+        value.RendererVisibleInBackgroundOnlyRegion &&
+        value.DesktopIconHostLocated &&
+        value.DesktopIconHostVisible &&
+        value.DesktopIconsAboveRenderer &&
+        value.TaskbarLocated &&
+        value.TaskbarVisible &&
+        value.TaskbarAboveRenderer &&
+        value.RendererNotInAltTab &&
+        value.RendererNotInTaskbar &&
+        value.RendererDoesNotOwnForeground &&
+        value.DesktopInputAvailable;
+}
+
+public sealed record RendererPresentationMetrics(
+    long DecodedFrameCount = 0,
+    long BackBufferCopyCount = 0,
+    long PaintRequestCount = 0,
+    long PaintCount = 0,
+    long PresentedFrameCount = 0,
+    ulong LastFrameChecksum = 0,
+    ulong LastPresentedChecksum = 0,
+    DateTimeOffset? LastDecodedAt = null,
+    DateTimeOffset? LastPaintAt = null,
+    DateTimeOffset? LastPresentedAt = null,
+    int LastPaintResult = 0,
+    bool OwnWindowPixelsDetected = false,
+    bool DesktopPixelsDetected = false,
+    bool DesktopAnimationDetected = false,
+    bool TestPatternMarkerDetected = false,
+    long InvalidationRequestCount = 0,
+    long TestPatternTickCount = 0);
+
+public static class RendererSelfTestPattern
+{
+    // COLORREF / 32-bit BGRA values. These colors are intentionally uncommon
+    // in camera footage so a desktop probe can distinguish the built-in test
+    // surface from a merely non-black desktop.
+    public const uint RedMarker = 0x00E62A2A;
+    public const uint GreenMarker = 0x002AE62A;
+    public const uint BlueMarker = 0x002A2AE6;
+    public const uint YellowMarker = 0x00E6E62A;
+    public static IReadOnlyList<(double X, double Y)> MarkerPositions { get; } =
+    [
+        (0.42, 0.12), (0.58, 0.12), (0.42, 0.88), (0.58, 0.88)
+    ];
+}
 
 public sealed record RendererEvent(
     string RendererId,

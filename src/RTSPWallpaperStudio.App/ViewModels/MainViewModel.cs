@@ -23,6 +23,7 @@ public partial class MainViewModel : ObservableObject
     private readonly JsonSettingsStore _settingsStore;
     private readonly ProtectedSecretStore _secretStore;
     private readonly ConnectionTester _connectionTester;
+    private readonly DiagnosticsPackageService _diagnosticsPackageService;
     private readonly DesktopMonitorProvider _monitorProvider;
     private readonly RendererProcessManager _rendererManager;
     private readonly RuntimeStateStore _runtimeStateStore;
@@ -34,6 +35,7 @@ public partial class MainViewModel : ObservableObject
     private AppSettings _settings = new();
     private RuntimeState _runtimeState = new();
     private CancellationTokenSource? _connectionTestCts;
+    private RendererMetrics? _lastRendererMetrics;
 
     [ObservableProperty]
     private RtspProfile? _selectedProfile;
@@ -51,7 +53,7 @@ public partial class MainViewModel : ObservableObject
     private string _currentPage = "home";
 
     [ObservableProperty]
-    private string _themeMode = "Light";
+    private string _themeMode = "Dark";
 
     [ObservableProperty]
     private bool _startWithWindows;
@@ -101,10 +103,17 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private string _relayStatus = "go2rtcを確認しています。";
 
+    [ObservableProperty]
+    private string _playbackHealth = "映像ヘルスを待機しています。";
+
+    [ObservableProperty]
+    private string _shellCompositionStatus = "Windows Shell合成検証を待機しています。";
+
     public MainViewModel(
         JsonSettingsStore settingsStore,
         ProtectedSecretStore secretStore,
         ConnectionTester connectionTester,
+        DiagnosticsPackageService diagnosticsPackageService,
         DesktopMonitorProvider monitorProvider,
         RendererProcessManager rendererManager,
         RuntimeStateStore runtimeStateStore,
@@ -117,6 +126,7 @@ public partial class MainViewModel : ObservableObject
         _settingsStore = settingsStore;
         _secretStore = secretStore;
         _connectionTester = connectionTester;
+        _diagnosticsPackageService = diagnosticsPackageService;
         _monitorProvider = monitorProvider;
         _rendererManager = rendererManager;
         _runtimeStateStore = runtimeStateStore;
@@ -135,6 +145,8 @@ public partial class MainViewModel : ObservableObject
         ReconnectCommand = new AsyncRelayCommand(ReconnectAsync);
         ResetDesktopCommand = new AsyncRelayCommand(ResetDesktopAsync);
         SaveSettingsCommand = new AsyncRelayCommand(SaveSettingsAsync);
+        WallpaperSelfTestCommand = new AsyncRelayCommand(RunWallpaperSelfTestAsync);
+        CreateDiagnosticsPackageCommand = new AsyncRelayCommand(CreateDiagnosticsPackageAsync);
         NavigateCommand = new RelayCommand<string>(page => NavigateTo(page));
         OpenLogsCommand = new RelayCommand(OpenLogs);
         _rendererManager.RendererEventReceived += RendererManagerOnRendererEventReceived;
@@ -145,10 +157,10 @@ public partial class MainViewModel : ObservableObject
     public ObservableCollection<MonitorInfo> Monitors { get; } = [];
     public IReadOnlyList<NavigationItemViewModel> NavigationItems { get; } =
     [
-        new("home", "ホーム", "⌂"),
-        new("profiles", "RTSPプロファイル", "◈"),
+        new("home", "ライブラリ", "⌂"),
+        new("profiles", "ストリーム", "◈"),
         new("display", "ディスプレイ", "▣"),
-        new("diagnostics", "診断と安全", "✓"),
+        new("diagnostics", "パフォーマンス", "◌"),
         new("settings", "設定", "⚙")
     ];
     public IAsyncRelayCommand ApplyCommand { get; }
@@ -159,6 +171,8 @@ public partial class MainViewModel : ObservableObject
     public IAsyncRelayCommand ReconnectCommand { get; }
     public IAsyncRelayCommand ResetDesktopCommand { get; }
     public IAsyncRelayCommand SaveSettingsCommand { get; }
+    public IAsyncRelayCommand WallpaperSelfTestCommand { get; }
+    public IAsyncRelayCommand CreateDiagnosticsPackageCommand { get; }
     public IRelayCommand<string> NavigateCommand { get; }
     public IRelayCommand OpenLogsCommand { get; }
     public Task InitializationTask { get; }
@@ -217,7 +231,7 @@ public partial class MainViewModel : ObservableObject
 
             _runtimeState.PreviousShutdownClean = false;
             await _runtimeStateStore.SaveAsync(_runtimeState);
-            ThemeMode = string.IsNullOrWhiteSpace(_settings.ThemeMode) ? "Light" : _settings.ThemeMode;
+            ThemeMode = string.IsNullOrWhiteSpace(_settings.ThemeMode) ? "Dark" : _settings.ThemeMode;
             StartWithWindows = _settings.StartWithWindows;
             StartMinimized = _settings.StartMinimized;
             SynchronizeStartupRegistration();
@@ -424,7 +438,7 @@ public partial class MainViewModel : ObservableObject
             SelectedProfile.LastStatus = PlaybackStatus.Starting;
             OnPropertyChanged(nameof(CurrentProfileStatus));
             StatusMessage = "Rendererへ設定を送信しました。最初の映像出力とデスクトップ配置を確認しています。";
-            FooterMessage = "成功表示はWallpaperVisibleイベント受信後だけに更新されます。";
+            FooterMessage = "GDI描画・実デスクトップ画素・継続表示の検証完了後だけ成功になります。";
         }
         catch (Exception ex)
         {
@@ -445,6 +459,57 @@ public partial class MainViewModel : ObservableObject
         }
 
         StatusMessage = "壁紙を停止しました。";
+    }
+
+    private async Task RunWallpaperSelfTestAsync()
+    {
+        var monitor = SelectedMonitor ?? Monitors.FirstOrDefault();
+        if (monitor is null)
+        {
+            StatusMessage = "セルフテスト対象のディスプレイが見つかりません。";
+            return;
+        }
+
+        try
+        {
+            await _rendererManager.StopAllAsync();
+            await _rendererManager.StartAsync(new RendererStartOptions(
+                "rtsp://127.0.0.1:8554/self-test",
+                null,
+                null,
+                TransportMode.Tcp,
+                300,
+                DisplayMode.Fill,
+                monitor.PersistentId,
+                Environment.ProcessId,
+                HardwareDecodeMode.Disabled,
+                true,
+                true));
+            StatusMessage = "壁紙描画セルフテストを実行中です。HWND、WorkerW、Shell合成、GDI、実画素を検証します。";
+            FooterMessage = "成功表示はWallpaperEndToEndVerifiedイベント受信後だけに更新されます。";
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "壁紙描画セルフテストの起動に失敗しました。");
+            StatusMessage = "壁紙描画セルフテストを起動できませんでした。";
+            FooterMessage = ex.Message;
+        }
+    }
+
+    private async Task CreateDiagnosticsPackageAsync()
+    {
+        try
+        {
+            var path = await _diagnosticsPackageService.CreateAsync(_lastRendererMetrics, "GUI diagnostics package command");
+            StatusMessage = "診断パッケージを作成しました。";
+            FooterMessage = path;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "診断パッケージの作成に失敗しました。");
+            StatusMessage = "診断パッケージの作成に失敗しました。";
+            FooterMessage = ex.Message;
+        }
     }
 
     private async Task EmergencyStopAsync()
@@ -541,10 +606,27 @@ public partial class MainViewModel : ObservableObject
 
     private void ApplyRendererEvent(RendererEvent rendererEvent)
     {
-        DiagnosticsText = $"{rendererEvent.Timestamp:HH:mm:ss}  {rendererEvent.Type}\n" +
-                          $"コード：{rendererEvent.ErrorCode ?? "なし"}\n" +
-                          $"内容：{rendererEvent.UserMessage ?? "-"}\n" +
-                          $"技術情報：{rendererEvent.TechnicalDetails ?? "-"}";
+        if (rendererEvent.Metrics is { } eventMetrics)
+        {
+            _lastRendererMetrics = eventMetrics;
+        }
+        if (rendererEvent.Type == RendererEventType.ShellCompositionValidationStarted)
+        {
+            ShellCompositionStatus = "検証中：デスクトップアイコン、タスクバー、入力、フォーカスを確認しています。";
+        }
+        else if (rendererEvent.Metrics?.ShellComposition is { } shell)
+        {
+            ShellCompositionStatus = FormatShellCompositionStatus(shell);
+        }
+        UpdatePlaybackHealth(rendererEvent);
+        if (rendererEvent.Type != RendererEventType.Heartbeat)
+        {
+            DiagnosticsText = $"{rendererEvent.Timestamp:HH:mm:ss}  {rendererEvent.Type}\n" +
+                              $"コード：{rendererEvent.ErrorCode ?? "なし"}\n" +
+                              $"内容：{rendererEvent.UserMessage ?? "-"}\n" +
+                              $"技術情報：{rendererEvent.TechnicalDetails ?? "-"}" +
+                              (rendererEvent.Metrics is null ? string.Empty : $"\n\n映像ヘルス：{PlaybackHealth}");
+        }
         switch (rendererEvent.Type)
         {
             case RendererEventType.RendererReady:
@@ -558,7 +640,16 @@ public partial class MainViewModel : ObservableObject
                 if (SelectedProfile is not null) SelectedProfile.LastStatus = PlaybackStatus.Buffering;
                 StatusMessage = "映像をバッファリングしています。";
                 break;
-            case RendererEventType.WallpaperVisible:
+            case RendererEventType.PlaybackStalled:
+                if (SelectedProfile is not null) SelectedProfile.LastStatus = PlaybackStatus.Reconnecting;
+                StatusMessage = "映像の進行停止を検出しました。自動再接続しています。";
+                FooterMessage = "フリーズ監視がMediaPlayerを安全に再生成しています。壁紙は復旧完了まで表示しません。";
+                break;
+            case RendererEventType.Reconnecting:
+                if (SelectedProfile is not null) SelectedProfile.LastStatus = PlaybackStatus.Reconnecting;
+                StatusMessage = "RTSPストリームを再接続しています。";
+                break;
+            case RendererEventType.WallpaperEndToEndVerified:
                 if (SelectedProfile is not null)
                 {
                     SelectedProfile.LastStatus = PlaybackStatus.Playing;
@@ -571,8 +662,17 @@ public partial class MainViewModel : ObservableObject
                     OnPropertyChanged(nameof(CurrentProfileStatus));
                 }
 
-                StatusMessage = "壁紙を表示しました。映像出力・親ウィンドウ・矩形検証を通過しています。";
+                StatusMessage = "壁紙を表示しました。GDI描画・実デスクトップ画素・継続表示まで検証済みです。";
                 FooterMessage = "再生中です。Ctrl + Alt + Shift + F12 でいつでも停止できます。";
+                break;
+            case RendererEventType.WallpaperShellCompositionVerified:
+                ShellCompositionStatus = "✓ Shell合成検証済み：アイコン・タスクバー・入力・フォーカスを保護しています。";
+                break;
+            case RendererEventType.ShellCompositionValidationFailed:
+                ShellCompositionStatus = $"✕ Shell合成検証失敗：{rendererEvent.UserMessage ?? "安全条件を満たしません。"}";
+                break;
+            case RendererEventType.WallpaperVisible:
+                StatusMessage = "Renderer HWNDは可視ですが、最終成功判定を継続検証しています。";
                 break;
             case RendererEventType.PlaybackRunning:
                 StatusMessage = "再生中です。";
@@ -590,6 +690,37 @@ public partial class MainViewModel : ObservableObject
 
         OnPropertyChanged(nameof(CurrentProfileStatus));
     }
+
+    private void UpdatePlaybackHealth(RendererEvent rendererEvent)
+    {
+        if (rendererEvent.Metrics is not { } metrics)
+        {
+            return;
+        }
+
+        var age = metrics.VideoProgressAgeSeconds is { } seconds
+            ? $"{seconds:0.0}秒前"
+            : "未取得";
+        PlaybackHealth = $"{metrics.MediaState}  ·  Vout {metrics.VoutCount}  ·  映像進行 {age}  ·  MediaTime {metrics.MediaTimeMs}ms  ·  再接続 {metrics.ReconnectCount}回\n" +
+                         $"HWND 0x{metrics.RendererHwnd.ToInt64():X}  ·  親 0x{metrics.ParentHwnd.ToInt64():X} / 期待値 0x{metrics.ExpectedParentHwnd.ToInt64():X}  ·  表示 {metrics.WindowVisible}  ·  矩形 {metrics.RendererRect}  ·  モニター {metrics.MonitorRect}";
+        if (metrics.ShellComposition is { } shell)
+        {
+            ShellCompositionStatus = FormatShellCompositionStatus(shell);
+        }
+    }
+
+    private static string FormatShellCompositionStatus(RendererShellCompositionMetrics shell) =>
+        $"映像 {(shell.RendererFramesVisibleOnDesktop ? "✓" : "✕")}  " +
+        $"ホスト {(shell.DesktopIconHostLocated && shell.DesktopIconHostVisible ? "✓" : "✕")}  " +
+        $"アイコン前面 {(shell.DesktopIconsAboveRenderer ? "✓" : "✕")}  " +
+        $"タスクバー表示 {(shell.TaskbarLocated && shell.TaskbarVisible ? "✓" : "✕")}  " +
+        $"タスクバー前面 {(shell.TaskbarAboveRenderer ? "✓" : "✕")}  " +
+        $"入力 {(shell.DesktopInputAvailable ? "✓" : "✕")}  " +
+        $"Alt+Tab外 {(shell.RendererNotInAltTab ? "✓" : "✕")}  " +
+        $"タスクバー外 {(shell.RendererNotInTaskbar ? "✓" : "✕")}  " +
+        $"フォーカス非取得 {(shell.RendererDoesNotOwnForeground ? "✓" : "✕")}\n" +
+        $"Shell合成：{(shell.IsCompositionVerified ? "検証済み" : "未検証")}  アイコン数：{shell.DesktopIconCount}  " +
+        $"Renderer Z:{shell.RendererZOrderIndex} / ShellView Z:{shell.ShellViewZOrderIndex} / Taskbar Z:{shell.TaskbarZOrderIndex}";
 
     private async Task MarkFailureAsync(string code, string message, string? technicalDetails)
     {

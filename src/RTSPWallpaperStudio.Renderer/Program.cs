@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using RTSPWallpaperStudio.Core.Domain;
 using RTSPWallpaperStudio.Core.Services;
@@ -13,6 +14,8 @@ internal static class Program
     {
         try
         {
+            Console.OutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+            Console.SetError(new StreamWriter(Console.OpenStandardError(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)) { AutoFlush = true });
             RunAsync(args).GetAwaiter().GetResult();
         }
         catch (Exception ex)
@@ -48,6 +51,9 @@ internal static class Program
         await ipc.SendEventAsync(new RendererEvent(commandLine.RendererId, RendererEventType.RendererReady, DateTimeOffset.UtcNow,
             UserMessage: "Rendererを起動しました。"), lifetime.Token);
         Trace("RendererReady送信完了");
+        await ipc.SendEventAsync(new RendererEvent(commandLine.RendererId, RendererEventType.RendererWindowCreated,
+            DateTimeOffset.UtcNow, UserMessage: "Renderer専用HWNDを作成しました。",
+            TechnicalDetails: $"hwnd=0x{window.Hwnd.ToInt64():X}; class={NativeRendererWindow.ClassName}; processId={Environment.ProcessId}"), lifetime.Token);
 
         Trace("コマンドループ開始");
         var commandLoop = ipc.RunCommandLoopAsync(async message =>
@@ -94,6 +100,8 @@ internal static class Program
     private static async Task WatchdogAsync(int parentPid, string rendererId, RendererStreamPlayer player, NativeRendererWindow window,
         DesktopHostController desktopHost, RendererIpcClient ipc, CancellationToken cancellationToken)
     {
+        var stallThreshold = TimeSpan.FromSeconds(8);
+        var unhealthySince = (DateTimeOffset?)null;
         while (!cancellationToken.IsCancellationRequested)
         {
             await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
@@ -104,10 +112,44 @@ internal static class Program
                 return;
             }
 
-            await ipc.SendEventAsync(new RendererEvent(rendererId, RendererEventType.Heartbeat, DateTimeOffset.UtcNow), cancellationToken);
+            var heartbeatMetrics = player.IsRunning && player.IsAttached
+                ? player.GetMetricsForDiagnostics()
+                : null;
+            await ipc.SendEventAsync(new RendererEvent(rendererId, RendererEventType.Heartbeat, DateTimeOffset.UtcNow,
+                Metrics: heartbeatMetrics), cancellationToken);
             if (player.IsRunning && player.IsAttached && !desktopHost.ValidateAttachment(window.Hwnd, out _))
             {
                 await player.ReattachAfterShellRestartAsync(cancellationToken);
+                continue;
+            }
+
+            if (player.IsRunning && player.IsAttached)
+            {
+                var health = player.GetPlaybackHealth();
+                var now = DateTimeOffset.UtcNow;
+                var unhealthy = player.HasPlaybackError || !health.IsPlaying || health.VoutCount <= 0;
+                if (unhealthy)
+                {
+                    unhealthySince ??= now;
+                    if (now - unhealthySince.Value >= TimeSpan.FromSeconds(4))
+                    {
+                        await player.ReconnectAsync(cancellationToken);
+                        unhealthySince = null;
+                    }
+                }
+                else
+                {
+                    unhealthySince = null;
+                    if (PlaybackStallDetector.IsStalled(health.IsPlaying, health.VoutCount, health.LastProgressAt,
+                        now, stallThreshold))
+                    {
+                        await player.RecoverFromStallAsync(stallThreshold, cancellationToken);
+                    }
+                }
+            }
+            else
+            {
+                unhealthySince = null;
             }
         }
     }
